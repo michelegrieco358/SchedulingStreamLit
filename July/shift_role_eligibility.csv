@@ -1,34 +1,46 @@
-reparto_id,shift_code,role,ruolo,enabled
-ADT,G,OSS,Z - OSS,true
-MED,G,MEDSP,Z- Medico specialista,true
-MEDG,N,MEDGU,Z -Medico di guardia,true
-REP0,G,IP,Z -Infermiere professionale,true
-REP0,G,OSS,Z - OSS,true
-REP0,M,ASA,Z- ASA,true
-REP0,N,IP,Z -Infermiere professionale,true
-REP0,P,ASA,Z- ASA,true
-REP0,P,IP,Z -Infermiere professionale,true
-REP0,P,OSS,Z - OSS,true
-REP2,M,IP,Z -Infermiere professionale,true
-REP2,M,OSS,Z - OSS,true
-REP2,N,IP,Z -Infermiere professionale,true
-REP2,N,OSS,Z - OSS,true
-REP2,P,IP,Z -Infermiere professionale,true
-REP2,P,OSS,Z - OSS,true
-REP3,M,IP,Z -Infermiere professionale,true
-REP3,M,OSS,Z - OSS,true
-REP3,N,IP,Z -Infermiere professionale,true
-REP3,N,OSS,Z - OSS,true
-REP3,P,IP,Z -Infermiere professionale,true
-REP3,P,OSS,Z - OSS,true
-REP5,M,IP,Z -Infermiere professionale,true
-REP5,M,OSS,Z - OSS,true
-REP5,N,IP,Z -Infermiere professionale,true
-REP5,N,OSS,Z - OSS,true
-REP5,P,IP,Z -Infermiere professionale,true
-REP5,P,OSS,Z - OSS,true
-RIA,G,FIS.,Z- Fisioterapista,true
-RIA,G,LOGO,Z- Logopedista,true
-RIA,G,NEURO,Z- Neuropsicologo,true
-RIA,G,TEROC,Z- Terapista occupazionale,true
-RIA2,G,FIS,FIS,true
+shift_code,role,allowed
+F,ASA,False
+F,FIS.,False
+F,IP,False
+F,LOGO,False
+F,MEDGU,False
+F,MEDSP,False
+F,NEURO,False
+F,OSS,False
+F,TEROC,False
+G,ASA,False
+G,FIS.,True
+G,IP,True
+G,LOGO,True
+G,MEDGU,False
+G,MEDSP,True
+G,NEURO,True
+G,OSS,True
+G,TEROC,True
+M,ASA,True
+M,FIS.,False
+M,IP,True
+M,LOGO,False
+M,MEDGU,False
+M,MEDSP,False
+M,NEURO,False
+M,OSS,True
+M,TEROC,False
+N,ASA,False
+N,FIS.,False
+N,IP,True
+N,LOGO,False
+N,MEDGU,True
+N,MEDSP,False
+N,NEURO,False
+N,OSS,True
+N,TEROC,False
+P,ASA,True
+P,FIS.,False
+P,IP,True
+P,LOGO,False
+P,MEDGU,False
+P,MEDSP,False
+P,NEURO,False
+P,OSS,True
+P,TEROC,False
