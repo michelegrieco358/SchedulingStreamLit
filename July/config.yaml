@@ -16,7 +16,7 @@ defaults:
   weekly_rest_min_days: 1
   biweekly_rest_min_days: 2
   contract_hours_by_role_h:
-    000: 150
+    "000": 150
     BIOTEC: 158.25
     CR: 150
     CS: 150
@@ -36,7 +36,7 @@ defaults:
   absences:
     count_as_worked_hours: true
     full_day_hours_by_role_h:
-      000: 7.0
+      "000": 7.0
       BIOTEC: 7.0
       CR: 7.0
       CS: 7.0
