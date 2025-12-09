@@ -1,0 +1,9 @@
+shift_code,role,allowed
+G,IP,True
+G,OSS,True
+M,IP,True
+M,OSS,True
+N,IP,True
+N,OSS,True
+P,IP,True
+P,OSS,True
