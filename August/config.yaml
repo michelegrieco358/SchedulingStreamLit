@@ -1,0 +1,122 @@
+horizon:
+  start_date: 2024-08-01
+  end_date: 2024-08-31
+
+rest_rules:
+  min_between_shifts_h: 11
+  rest11_penalty_weight: 100.0
+  weekly_rest_penalty_weight: 100.0
+
+preassignments:
+  change_penalty_weight: 5.0
+
+defaults:
+  allowed_roles: ["000", "BIOTEC", "CR", "CS", "FIS.", "IMP", "IP", "LOGO", "MASS", "MEDGU", "MEDSP", "NEURO", "OSS", "PSICO", "RICS", "TECNF", "TEROC"]
+  departments: ["ADT", "MED", "MEDG", "REP0", "REP2", "REP3", "REP5", "RIA", "RIA2"]
+  weekly_rest_min_days: 1
+  biweekly_rest_min_days: 2
+  contract_hours_by_role_h:
+    "000": 150
+    BIOTEC: 158.25
+    CR: 150
+    CS: 150
+    FIS.: 150
+    IMP: 150
+    IP: 150
+    LOGO: 150
+    MASS: 150
+    MEDGU: 150
+    MEDSP: 158.25
+    NEURO: 158.25
+    OSS: 150
+    PSICO: 150
+    RICS: 158.25
+    TECNF: 150
+    TEROC: 150
+  absences:
+    count_as_worked_hours: true
+    full_day_hours_by_role_h:
+      "000": 7.0
+      BIOTEC: 7.0
+      CR: 7.0
+      CS: 7.0
+      FIS.: 7.0
+      IMP: 7.0
+      IP: 7.0
+      LOGO: 7.0
+      MASS: 7.0
+      MEDGU: 7.0
+      MEDSP: 7.0
+      NEURO: 7.0
+      OSS: 7.0
+      PSICO: 7.0
+      RICS: 7.0
+      TECNF: 7.0
+      TEROC: 7.0
+    fallback_contract_daily_avg_h: 7.0
+  rest11h:
+    max_monthly_exceptions: 2
+    max_consecutive_exceptions: 1
+  overstaffing:
+    enabled: true
+    group_cap_default: 1
+  balance:
+    max_balance_delta_month_h: 36
+    due_hours_penalty_weight: 5.0
+    final_balance_penalty_weight: 5.0
+  night:
+    max_consecutive_nights: 3
+    can_work_night: true
+    max_per_week: 2
+    max_per_month: 8
+    extra_consecutive_penalty_weight: 10.0
+    single_night_recovery_penalty_weight: 10.0
+  fairness:
+    night_weight: 0.5
+    weekend_weight: 0.5
+
+roles:
+  IP:
+    can_work_night: true
+  OSS:
+    can_work_night: true
+  MEDSP:
+    can_work_night: true
+  MEDGU:
+    can_work_night: true
+  NEURO:
+    can_work_night: true
+  CS:
+    can_work_night: true
+  BIOTEC:
+    can_work_night: true
+  RICS:
+    can_work_night: true
+  FIS.:
+    can_work_night: false
+  LOGO:
+    can_work_night: false
+  TEROC:
+    can_work_night: false
+  CR:
+    can_work_night: false
+  MASS:
+    can_work_night: false
+  TECNF:
+    can_work_night: false
+  PSICO:
+    can_work_night: false
+  IMP:
+    can_work_night: false
+  "000":
+    can_work_night: false
+
+shift_types:
+  night_codes: ["N"]
+
+cross:
+  max_shifts_month: 6
+  penalty_weight: 10.0
+
+locks:
+  allow_cross_reparto: true
