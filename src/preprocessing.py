@@ -722,6 +722,34 @@ def build_all(dfs: dict, cfg: dict) -> dict:
     )
     emp_base["pool_id"] = emp_base["pool_id"].fillna("").astype(str).str.strip()
 
+    if df_pools is not None and not df_pools.empty:
+        fallback_pool = (
+            df_pools.loc[:, ["role", "reparto_id", "pool_id"]]
+            .copy()
+            .dropna(subset=["pool_id"])
+        )
+        fallback_pool["role"] = fallback_pool["role"].astype(str).str.strip().str.upper()
+        fallback_pool["reparto_id"] = (
+            fallback_pool["reparto_id"].astype(str).str.strip().str.upper()
+        )
+        fallback_pool["pool_id"] = fallback_pool["pool_id"].astype(str).str.strip()
+        fallback_pool = fallback_pool.drop_duplicates(subset=["role", "reparto_id"])
+
+        emp_base = emp_base.merge(
+            fallback_pool,
+            left_on=["role", "employee_reparto_id"],
+            right_on=["role", "reparto_id"],
+            how="left",
+            suffixes=("", "_fallback"),
+        )
+        emp_base["pool_id"] = (
+            emp_base["pool_id"]
+            .replace("", np.nan)
+            .fillna(emp_base["pool_id_fallback"])
+            .fillna("")
+        )
+        emp_base = emp_base.drop(columns=["reparto_id", "pool_id_fallback"])
+
     # 1) dipendenti del reparto dello slot
     in_reparto_candidates = slot_role.merge(
         emp_base,
