@@ -57,6 +57,12 @@ def main() -> None:
         default="data",
         help="Directory dei CSV di input (default: data).",
     )
+    parser.add_argument(
+        "--max-time",
+        type=float,
+        default=3600,
+        help="Tempo massimo in secondi per il solver CP-SAT (default: 3600).",
+    )
     args = parser.parse_args()
 
     # Ignora l'avviso informativo sui locks mancanti, utile in ambiente POC.
@@ -77,7 +83,7 @@ def main() -> None:
     )
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 900
+    solver.parameters.max_time_in_seconds = args.max_time
     callback = GapLoggingCallback()
 
     status = solver.SolveWithSolutionCallback(model, callback)

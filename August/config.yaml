@@ -115,7 +115,7 @@ shift_types:
   night_codes: ["N"]
 
 cross:
-  max_shifts_month: 6
+  max_shifts_month: 15
   penalty_weight: 10.0
 
 locks:
