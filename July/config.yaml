@@ -57,6 +57,7 @@ defaults:
   rest11h:
     max_monthly_exceptions: 2
     max_consecutive_exceptions: 1
+    include_cross_reparto_pairs: true
   overstaffing:
     enabled: true
     group_cap_default: 1

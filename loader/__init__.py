@@ -40,7 +40,7 @@ from .employees import (
     load_employees,
     load_role_dept_pools,
 )
-from .gap_pairs import build_gap_pairs
+from .gap_pairs import build_gap_pairs, build_overlap_pairs
 from .history import load_history
 from .leaves import apply_unplanned_leave_durations, load_leaves
 from .preassignments import load_preassignments
@@ -77,6 +77,7 @@ class LoadedData:
     role_dept_pools_df: pd.DataFrame
     dept_compat_df: pd.DataFrame
     gap_pairs_df: pd.DataFrame
+    overlap_pairs_df: pd.DataFrame
     locks_df: pd.DataFrame
     locks_must_df: pd.DataFrame
     locks_forbid_df: pd.DataFrame
@@ -181,8 +182,12 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
     gap_pairs_df = build_gap_pairs(
         shift_slots_df,
         max_check_window_h=int(max_gap_window),
+        include_cross_reparto_pairs=bool(
+            (defaults.get("rest11h", {}) or {}).get("include_cross_reparto_pairs", False)
+        ),
         add_debug=False,
     )
+    overlap_pairs_df = build_overlap_pairs(shift_slots_df)
 
     history_df = load_history(
         os.path.join(data_dir, "history.csv"),
@@ -271,6 +276,7 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
         role_dept_pools_df=role_dept_pools_df,
         dept_compat_df=dept_compat_df,
         gap_pairs_df=gap_pairs_df,
+        overlap_pairs_df=overlap_pairs_df,
         locks_df=locks_df,
         locks_must_df=locks_must_df,
         locks_forbid_df=locks_forbid_df,

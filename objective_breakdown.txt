@@ -1,17 +1,16 @@
 Breakdown funzione obiettivo
-Valore totale funzione obiettivo: 6076536.000000
-Somma contributi calcolati: 6076536.000000
+Valore totale funzione obiettivo: 12018540.000000
+Somma contributi calcolati: 12018540.000000
 
 Dettaglio per componente:
-- ore_mensili_sotto: contributo=0.000000 (0.00%), violazioni=0.000000 (0.00%), violazioni_turni_medi=0.000000 (0.00%)
-- ore_mensili_sopra: contributo=424440.000000 (6.98%), violazioni=23580.000000 (0.16%), violazioni_turni_medi=56.142857 (50.00%)
-- bilancio_finale: contributo=424440.000000 (6.98%), violazioni=23580.000000 (0.16%), violazioni_turni_medi=56.142857 (50.00%)
-- notti_consecutive: contributo=0.000000 (0.00%), violazioni=0.000000 (0.00%)
-- recupero_singola_notte: contributo=0.000000 (0.00%), violazioni=0.000000 (0.00%)
-- fairness_notti: contributo=0.000000 (0.00%), violazioni=0.000000 (0.00%)
-- fairness_weekend: contributo=1927656.000000 (31.72%), violazioni=34607.000000 (99.58%)
-- riposo_11h: contributo=0.000000 (0.00%), violazioni=0.000000 (0.00%)
-- riposo_settimanale: contributo=3300000.000000 (54.31%), violazioni=33.000000 (0.09%)
+- ore_mensili_sotto: contributo=724140.000000 (6.03%), violazioni_equivalenti=95.785714 (17.24%), violazioni_raw=40230.000000 (quota turni: 41.89%)
+- ore_mensili_sopra: contributo=140130.000000 (1.17%), violazioni_equivalenti=18.535714 (3.34%), violazioni_raw=7785.000000 (quota turni: 8.11%)
+- bilancio_finale: contributo=864270.000000 (7.19%), violazioni_equivalenti=114.321429 (20.57%), violazioni_raw=48015.000000 (quota turni: 50.00%)
+- notti_consecutive: contributo=190000.000000 (1.58%), violazioni=19.000000 (3.42%)
+- recupero_singola_notte: contributo=570000.000000 (4.74%), violazioni=57.000000 (10.26%)
+- riposo_11h: contributo=1500000.000000 (12.48%), violazioni=15.000000 (2.70%)
+- riposo_settimanale: contributo=6300000.000000 (52.42%), violazioni=63.000000 (11.34%)
+- assegnazioni_cross: contributo=1730000.000000 (14.39%), violazioni=173.000000 (31.14%)
 
-Totale violazioni (non pesate): 81800.000000
-Totale violazioni equivalenti (turni medi): 112.285714
+Totale violazioni (non pesate): 96357.000000
+Totale violazioni equivalenti (turni medi): 228.642857

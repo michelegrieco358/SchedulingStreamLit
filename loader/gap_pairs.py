@@ -48,6 +48,7 @@ def build_gap_pairs(
     max_check_window_h: int = 15,
     handover_minutes: int = 0,
     *,
+    include_cross_reparto_pairs: bool = False,
     add_debug: bool = True,
 ) -> pd.DataFrame:
     """Costruisce la tabella delle coppie di slot incompatibili per riposo."""
@@ -56,6 +57,8 @@ def build_gap_pairs(
         raise ValueError("max_check_window_h deve essere positivo")
     if handover_minutes < 0:
         raise ValueError("handover_minutes deve essere >= 0")
+    if not isinstance(include_cross_reparto_pairs, bool):
+        raise TypeError("include_cross_reparto_pairs deve essere booleano")
 
     _ensure_required_columns(shift_slots, REQUIRED_COLUMNS)
 
@@ -100,9 +103,12 @@ def build_gap_pairs(
 
     result_frames: list[pd.DataFrame] = []
 
-    grouped = shift_slots.groupby("reparto_id", sort=False, dropna=False)
+    if include_cross_reparto_pairs:
+        grouped = [(None, shift_slots)]
+    else:
+        grouped = shift_slots.groupby("reparto_id", sort=False, dropna=False)
 
-    for reparto_id, group in grouped:
+    for _group_reparto_id, group in grouped:
         group_sorted = group.sort_values("start_dt").reset_index(drop=True)
 
         start_naive = _to_naive_utc(group_sorted["start_dt"])  # naive per searchsorted
@@ -151,9 +157,11 @@ def build_gap_pairs(
 
         gap_valid = gap_hours_eff[valid_mask]
 
+        s1_reparto = group_sorted["reparto_id"].iloc[s1_valid].to_numpy()
+
         pairs_df = pd.DataFrame(
             {
-                "reparto_id": reparto_id,
+                "reparto_id": s1_reparto,
                 "s1_id": group_sorted["slot_id"].iloc[s1_valid].to_numpy(),
                 "s2_id": group_sorted["slot_id"].iloc[s2_valid].to_numpy(),
                 "gap_hours": gap_valid,
@@ -195,10 +203,86 @@ def build_gap_pairs(
         return pd.DataFrame(base_columns)
 
     result_df = pd.concat(result_frames, ignore_index=True)
-    result_df = result_df.drop_duplicates(subset=["reparto_id", "s1_id", "s2_id"])
-    result_df = result_df.sort_values(["reparto_id", "s1_id", "s2_id"]).reset_index(drop=True)
+    result_df = result_df.drop_duplicates(subset=["s1_id", "s2_id"])
+    result_df = result_df.sort_values(["s1_id", "s2_id"]).reset_index(drop=True)
 
     return result_df
 
 
-__all__ = ["build_gap_pairs", "_iso_year_week_of"]
+def build_overlap_pairs(shift_slots: pd.DataFrame) -> pd.DataFrame:
+    """Costruisce la tabella delle coppie di slot con stesso shift_code che si sovrappongono nel tempo.
+
+    Restituisce un DataFrame con colonne ["s1_id", "s2_id"] dove s1_id < s2_id.
+    Usato dal modello per aggiungere vincoli hard assign1 + assign2 <= 1.
+    """
+    required = {"slot_id", "shift_code", "start_dt", "end_dt"}
+    missing = required - set(shift_slots.columns)
+    if missing:
+        raise ValueError(f"Colonne mancanti in shift_slots: {', '.join(sorted(missing))}")
+
+    empty = pd.DataFrame({"s1_id": pd.Series(dtype="int64"),
+                          "s2_id": pd.Series(dtype="int64")})
+
+    df = shift_slots.copy()
+
+    # Filtra solo slot con orario reale (R, SN, F hanno duration_min=0 e nessun orario)
+    if "duration_min" in df.columns:
+        df = df.loc[df["duration_min"].fillna(0).astype(float) > 0]
+
+    if df.empty:
+        return empty
+
+    # Ricava la data di calendario per raggruppamento efficiente
+    if "data_dt" in df.columns:
+        df["_cal_date"] = pd.to_datetime(df["data_dt"], errors="coerce").dt.date
+    else:
+        df["_cal_date"] = pd.to_datetime(df["start_dt"], errors="coerce").dt.date
+
+    keep = ["slot_id", "shift_code", "start_dt", "end_dt", "_cal_date"]
+    df = df.loc[:, [c for c in keep if c in df.columns]].copy()
+    df["start_dt"] = pd.to_datetime(df["start_dt"], utc=True, errors="coerce")
+    df["end_dt"] = pd.to_datetime(df["end_dt"], utc=True, errors="coerce")
+    df = df.dropna(subset=["start_dt", "end_dt"])
+
+    if df.empty:
+        return empty
+
+    result_frames: list[pd.DataFrame] = []
+
+    # Raggruppa per (shift_code, data di calendario):
+    # solo slot dello stesso tipo nella stessa data possono sovrapporsi.
+    for (_shift_code, _cal_date), group in df.groupby(
+        ["shift_code", "_cal_date"], sort=False, dropna=False
+    ):
+        if len(group) < 2:
+            continue
+
+        left = group.rename(columns={"slot_id": "s1_id", "start_dt": "s1_start", "end_dt": "s1_end"})
+        right = group.rename(columns={"slot_id": "s2_id", "start_dt": "s2_start", "end_dt": "s2_end"})
+
+        merged = left.loc[:, ["s1_id", "s1_start", "s1_end"]].merge(
+            right.loc[:, ["s2_id", "s2_start", "s2_end"]],
+            how="cross",
+        )
+
+        # Tieni solo s1_id < s2_id per evitare duplicati e auto-coppie
+        merged = merged.loc[merged["s1_id"] < merged["s2_id"]]
+
+        if merged.empty:
+            continue
+
+        # Maschera di overlap: s1_start < s2_end AND s2_start < s1_end
+        overlap_mask = (merged["s1_start"] < merged["s2_end"]) & (merged["s2_start"] < merged["s1_end"])
+        overlaps = merged.loc[overlap_mask, ["s1_id", "s2_id"]]
+
+        if not overlaps.empty:
+            result_frames.append(overlaps)
+
+    if not result_frames:
+        return empty
+
+    result = pd.concat(result_frames, ignore_index=True)
+    return result.drop_duplicates().reset_index(drop=True)
+
+
+__all__ = ["build_gap_pairs", "build_overlap_pairs", "_iso_year_week_of"]

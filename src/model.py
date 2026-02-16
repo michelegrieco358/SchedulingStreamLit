@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from calendar import monthrange
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 import math
 from typing import Any, Dict, Iterable, List, Mapping
@@ -61,6 +61,7 @@ class ModelContext:
     calendars: pd.DataFrame
     preassignments: pd.DataFrame
     bundle: Mapping[str, object]
+    overlap_pairs: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def employees_for_slot(self, slot_id: int) -> Iterable[str]:
         """Restituisce gli employee_id candidati per lo slot indicato."""
@@ -144,7 +145,7 @@ def build_model(context: ModelContext) -> ModelArtifacts:
             if str(code).strip()
         )
     else:
-        state_codes = ("M", "P", "N", "SN", "R", "F")
+        state_codes = ("M", "P", "N", "G", "SN", "R", "F")
 
     num_employees = int(bundle.get("num_employees", len(eid_of)))
     num_days = int(bundle.get("num_days", len(did_of)))
@@ -209,7 +210,7 @@ def build_model(context: ModelContext) -> ModelArtifacts:
         if shift_code:
             slots_by_day_state.setdefault((day_idx, shift_code), []).append(slot_idx)
 
-    shift_states = {state for state in ("M", "P", "N") if state in state_codes}
+    shift_states = {state for state in ("M", "P", "N", "G") if state in state_codes}
     for emp_idx in range(num_employees):
         for day_idx in range(num_days):
             for state in shift_states:
@@ -226,6 +227,17 @@ def build_model(context: ModelContext) -> ModelArtifacts:
                 model.Add(sum(assign_list) >= state_var)
                 for var in assign_list:
                     model.Add(var <= state_var)
+
+    # Hard rule: at most one assigned slot per employee per calendar day.
+    for emp_idx in range(num_employees):
+        for day_idx in range(num_days):
+            day_assignments = [
+                assign_vars[(emp_idx, slot_idx)]
+                for slot_idx in slots_by_day.get(day_idx, [])
+                if (emp_idx, slot_idx) in assign_vars
+            ]
+            if day_assignments:
+                model.Add(sum(day_assignments) <= 1)
 
     sn_code = "SN" if "SN" in state_codes else None
     night_codes = _resolve_night_codes(
@@ -312,6 +324,9 @@ def build_model(context: ModelContext) -> ModelArtifacts:
         absence_pairs,
     )
     rest_info = _add_rest_constraints(context, model, assign_vars, bundle)
+    # NOTE: _add_overlap_constraints rimossa — il vincolo "at most one slot per
+    # employee per day" (righe 231-240) è strettamente più forte e rende ridondante
+    # il vincolo sulle coppie overlap dello stesso shift_code.
     rest_day_info = _add_rest_day_windows(context, model, state_vars, bundle, state_codes)
     rest11_weight = _resolve_rest11_penalty_weight(
         context.cfg if isinstance(context.cfg, Mapping) else None
@@ -1065,7 +1080,7 @@ def _resolve_night_codes(cfg: Mapping[str, Any] | None) -> set[str]:
 
 def _resolve_day_codes(cfg: Mapping[str, Any] | None) -> set[str]:
     if not isinstance(cfg, Mapping):
-        return {"M", "P"}
+        return {"M", "P", "G"}
     shift_types = cfg.get("shift_types")
     codes: set[str] = set()
     if isinstance(shift_types, Mapping):
@@ -1081,7 +1096,7 @@ def _resolve_day_codes(cfg: Mapping[str, Any] | None) -> set[str]:
             if code_str:
                 codes.add(code_str)
     if not codes:
-        codes.update({"M", "P"})
+        codes.update({"M", "P", "G"})
     return codes
 
 
@@ -4222,6 +4237,47 @@ def _build_rest_history_counts(
     return result
 
 
+def _add_overlap_constraints(
+    context: ModelContext,
+    model: cp_model.CpModel,
+    assign_vars: Dict[tuple[int, int], cp_model.IntVar],
+    bundle: Mapping[str, object],
+) -> None:
+    """Aggiunge vincoli hard assign1 + assign2 <= 1 per coppie di slot sovrapposti.
+
+    Due slot con lo stesso shift_code che si sovrappongono nel tempo non possono essere
+    assegnati allo stesso dipendente. Il vincolo sugli stati impedisce già combinazioni
+    cross-tipo (M+G, M+P, ecc.), quindi questo vincolo copre il caso residuo: due slot
+    dello stesso tipo (es. due M con coverage_code diverso) sullo stesso orario.
+    """
+    overlap_pairs = context.overlap_pairs
+    if overlap_pairs is None or overlap_pairs.empty:
+        return
+    if not {"s1_id", "s2_id"}.issubset(overlap_pairs.columns):
+        return
+
+    sid_of: Mapping[int, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
+    eligible_eids: Mapping[int, Iterable[int]] = bundle.get("eligible_eids", {})  # type: ignore[assignment]
+
+    eligible_sets: dict[int, set[int]] = {}
+    for slot_idx, emp_iter in eligible_eids.items():
+        eligible_sets[slot_idx] = (
+            emp_iter if isinstance(emp_iter, set) else {int(e) for e in emp_iter}
+        )
+
+    for row in overlap_pairs.loc[:, ["s1_id", "s2_id"]].itertuples(index=False):
+        s1_idx = sid_of.get(int(row.s1_id))
+        s2_idx = sid_of.get(int(row.s2_id))
+        if s1_idx is None or s2_idx is None:
+            continue
+        both = eligible_sets.get(s1_idx, set()) & eligible_sets.get(s2_idx, set())
+        for emp_idx in both:
+            var1 = assign_vars.get((emp_idx, s1_idx))
+            var2 = assign_vars.get((emp_idx, s2_idx))
+            if var1 is not None and var2 is not None:
+                model.Add(var1 + var2 <= 1)
+
+
 def _add_rest_constraints(
     context: ModelContext,
     model: cp_model.CpModel,
@@ -4957,6 +5013,7 @@ def build_context_from_data(data: Any, bundle: Mapping[str, object]) -> ModelCon
     locks_must = _optional_frame(data, "locks_must", "locks_must_df")
     locks_forbid = _optional_frame(data, "locks_forbid", "locks_forbid_df")
     gap_pairs = _optional_frame(data, "gaps", "gap_pairs_df")
+    overlap_pairs = _optional_frame(data, "overlaps", "overlap_pairs_df")
     calendars = _require_frame(data, "calendar", "calendars", "calendar_df")
     preassignments = _optional_frame(data, "preassignments", "preassignments_df")
 
@@ -4973,6 +5030,7 @@ def build_context_from_data(data: Any, bundle: Mapping[str, object]) -> ModelCon
         locks_must=locks_must,
         locks_forbid=locks_forbid,
         gap_pairs=gap_pairs,
+        overlap_pairs=overlap_pairs,
         calendars=calendars,
         preassignments=preassignments if preassignments is not None else pd.DataFrame(),
         bundle=bundle,

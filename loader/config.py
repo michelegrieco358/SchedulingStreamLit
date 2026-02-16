@@ -86,6 +86,14 @@ def load_config(path: str) -> dict[str, Any]:
             )
         return parsed
 
+    include_cross_reparto_pairs = rest11h_cfg.get("include_cross_reparto_pairs", False)
+    if include_cross_reparto_pairs is None:
+        include_cross_reparto_pairs = False
+    if not isinstance(include_cross_reparto_pairs, bool):
+        raise LoaderError(
+            "config: defaults.rest11h.include_cross_reparto_pairs deve essere booleano (true/false)"
+        )
+
     defaults["rest11h"] = {
         "max_monthly_exceptions": _coerce_rest11h(
             rest11h_cfg.get("max_monthly_exceptions"),
@@ -95,6 +103,7 @@ def load_config(path: str) -> dict[str, Any]:
             rest11h_cfg.get("max_consecutive_exceptions"),
             "config: defaults.rest11h.max_consecutive_exceptions",
         ),
+        "include_cross_reparto_pairs": include_cross_reparto_pairs,
     }
 
     absences_cfg = defaults.get("absences")

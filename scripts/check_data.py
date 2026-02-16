@@ -21,6 +21,9 @@ class ValidationError(Exception):
     pass
 
 
+DEMAND_SHIFTS = {"M", "P", "N", "G"}
+
+
 def _read_csv_dicts(path: Path) -> tuple[list[dict[str, str]], list[str]]:
     if not path.exists():
         raise FileNotFoundError(f"File CSV non trovato: {path}")
@@ -486,8 +489,7 @@ def _check_shift_role(
             )
         seen_pairs.add(key)
 
-    demand_shifts = {"M", "P", "N"}
-    for sid in sorted(demand_shifts & shift_ids):
+    for sid in sorted(DEMAND_SHIFTS & shift_ids):
         if not any(r["shift_id"] == sid for r in rows):
             raise ValidationError(
                 f"{path.name}: nessun ruolo definito per il turno obbligatorio '{sid}'"
@@ -520,7 +522,7 @@ def _check_month_plan(path: Path, shifts: list[dict[str, str]]) -> tuple[list[di
     _require_columns(columns, required, path.name)
 
     shift_ids = {row["shift_id"] for row in shifts}
-    valid_turni = {"M", "P", "N"}
+    valid_turni = set(DEMAND_SHIFTS)
 
     for idx, row in enumerate(rows, start=2):
         shift_value = row[shift_col].strip()
@@ -553,7 +555,7 @@ def _check_month_plan(path: Path, shifts: list[dict[str, str]]) -> tuple[list[di
         _parse_date(row["data"], f"{path.name}: data")
 
     if shift_col != "turno":
-        for sid in sorted({"M", "P", "N"} & shift_ids):
+        for sid in sorted(DEMAND_SHIFTS & shift_ids):
             if not any(r[shift_col].strip() == sid for r in rows):
                 raise ValidationError(
                     f"{path.name}: nessuna riga con shift_code '{sid}' per copertura obbligatoria"

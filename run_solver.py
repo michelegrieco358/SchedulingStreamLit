@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 import warnings
 from typing import Optional
+
+logging.getLogger("loader").setLevel(logging.ERROR)
 
 from ortools.sat.python import cp_model
 
@@ -60,8 +63,8 @@ def main() -> None:
     parser.add_argument(
         "--max-time",
         type=float,
-        default=3600,
-        help="Tempo massimo in secondi per il solver CP-SAT (default: 3600).",
+        default=600,
+        help="Tempo massimo in secondi per il solver CP-SAT (default: 600).",
     )
     args = parser.parse_args()
 
@@ -82,8 +85,20 @@ def main() -> None:
         args.data_dir,
     )
 
+    # Diagnostica dimensione modello
+    proto = model.Proto()
+    print(f"--- Model stats ---")
+    print(f"  Variables:    {len(proto.variables)}")
+    print(f"  Constraints:  {len(proto.constraints)}")
+    print(f"  assign_vars:  {len(artifacts.assign_vars)}")
+    print(f"  gap_pairs:    {len(context.gap_pairs) if context.gap_pairs is not None else 0}")
+    print(f"  employees:    {len(context.employees)}")
+    print(f"  slots:        {len(context.slots)}")
+    print(f"-------------------")
+
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = args.max_time
+    solver.parameters.num_workers = 1
     callback = GapLoggingCallback()
 
     status = solver.SolveWithSolutionCallback(model, callback)

@@ -55,8 +55,9 @@ defaults:
       TEROC: 7.0
     fallback_contract_daily_avg_h: 7.0
   rest11h:
-    max_monthly_exceptions: 2
-    max_consecutive_exceptions: 1
+    max_monthly_exceptions: 3
+    max_consecutive_exceptions: 2
+    include_cross_reparto_pairs: true
   overstaffing:
     enabled: true
     group_cap_default: 1
