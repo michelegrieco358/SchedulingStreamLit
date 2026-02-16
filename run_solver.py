@@ -98,7 +98,7 @@ def main() -> None:
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = args.max_time
-    solver.parameters.num_workers = 1
+    solver.parameters.num_workers = 0
     callback = GapLoggingCallback()
 
     status = solver.SolveWithSolutionCallback(model, callback)
