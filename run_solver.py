@@ -101,7 +101,8 @@ def main() -> None:
     solver.parameters.num_workers = 0
     callback = GapLoggingCallback()
 
-    status = solver.SolveWithSolutionCallback(model, callback)
+    # Compatibile con le versioni recenti di OR-Tools Python.
+    status = solver.Solve(model, callback)
 
     print("Solver status:", solver.StatusName(status))
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):

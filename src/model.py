@@ -4371,6 +4371,15 @@ def _add_rest_constraints(
         day_idx = slot_date2.get(s2_idx)
         if day_idx is None:
             continue
+
+        # Vincolo ridondante: gli slot nello stesso giorno sono già mutuamente
+        # esclusi dal vincolo hard "max one slot/day" in build_model.
+        # Evitare queste coppie riduce drasticamente il numero di bool ausiliarie
+        # nel blocco rest11 senza cambiare la semantica del modello.
+        day_idx_s1 = slot_date2.get(s1_idx)
+        if day_idx_s1 is not None and day_idx_s1 == day_idx:
+            continue
+
         month_id = day_month_map.get(day_idx)
 
         elig1 = eligible_sets.get(s1_idx, set())

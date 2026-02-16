@@ -214,6 +214,24 @@ def test_rest_monthly_limit_blocks_excess_exceptions() -> None:
     assert status == cp_model.INFEASIBLE
 
 
+def test_rest_violation_ignores_same_day_pairs() -> None:
+    context = _make_rest_context(
+        horizon_start=date(2025, 1, 1),
+        horizon_end=date(2025, 1, 2),
+        slot_days=["2025-01-01", "2025-01-01"],
+        gap_hours=[8.0],
+        rest_threshold=11.0,
+        monthly_limit=0,
+        consecutive_limit=0,
+    )
+
+    artifacts = build_model(context)
+    sid_of = artifacts.slot_index
+
+    # La coppia è nello stesso giorno: il vincolo rest11 non deve essere costruito.
+    assert (0, sid_of[1], sid_of[2]) not in artifacts.rest_violation_pairs
+
+
 def test_rest_consecutive_limit_blocks_back_to_back_exceptions() -> None:
     context = _make_rest_context(
         horizon_start=date(2025, 1, 1),
