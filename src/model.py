@@ -212,6 +212,14 @@ def build_model(context: ModelContext) -> ModelArtifacts:
     shift_states = {state for state in ("M", "P", "N", "G") if state in state_codes}
     for emp_idx in range(num_employees):
         for day_idx in range(num_days):
+            day_assignments = [
+                assign_vars[(emp_idx, slot_idx)]
+                for slot_idx in slots_by_day.get(day_idx, [])
+                if (emp_idx, slot_idx) in assign_vars
+            ]
+            if day_assignments:
+                model.Add(sum(day_assignments) <= 1)
+
             for state in shift_states:
                 state_var = state_vars[(emp_idx, day_idx, state)]
                 slot_indices = slots_by_day_state.get((day_idx, state), [])
