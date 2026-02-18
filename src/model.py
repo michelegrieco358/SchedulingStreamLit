@@ -144,7 +144,7 @@ def build_model(context: ModelContext) -> ModelArtifacts:
             if str(code).strip()
         )
     else:
-        state_codes = ("M", "P", "N", "SN", "R", "F")
+        state_codes = ("M", "P", "N", "G", "SN", "R", "F")
 
     num_employees = int(bundle.get("num_employees", len(eid_of)))
     num_days = int(bundle.get("num_days", len(did_of)))
@@ -209,7 +209,7 @@ def build_model(context: ModelContext) -> ModelArtifacts:
         if shift_code:
             slots_by_day_state.setdefault((day_idx, shift_code), []).append(slot_idx)
 
-    shift_states = {state for state in ("M", "P", "N") if state in state_codes}
+    shift_states = {state for state in ("M", "P", "N", "G") if state in state_codes}
     for emp_idx in range(num_employees):
         for day_idx in range(num_days):
             for state in shift_states:
@@ -1065,7 +1065,7 @@ def _resolve_night_codes(cfg: Mapping[str, Any] | None) -> set[str]:
 
 def _resolve_day_codes(cfg: Mapping[str, Any] | None) -> set[str]:
     if not isinstance(cfg, Mapping):
-        return {"M", "P"}
+        return {"M", "P", "G"}
     shift_types = cfg.get("shift_types")
     codes: set[str] = set()
     if isinstance(shift_types, Mapping):
@@ -1081,7 +1081,7 @@ def _resolve_day_codes(cfg: Mapping[str, Any] | None) -> set[str]:
             if code_str:
                 codes.add(code_str)
     if not codes:
-        codes.update({"M", "P"})
+        codes.update({"M", "P", "G"})
     return codes
 
 
