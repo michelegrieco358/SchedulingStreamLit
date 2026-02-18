@@ -742,12 +742,11 @@ def build_all(dfs: dict, cfg: dict) -> dict:
             how="left",
             suffixes=("", "_fallback"),
         )
-        emp_base["pool_id"] = (
-            emp_base["pool_id"]
-            .replace("", np.nan)
-            .fillna(emp_base["pool_id_fallback"])
-            .fillna("")
-        )
+        pool_current = emp_base["pool_id"].astype("string").str.strip()
+        pool_current = pool_current.mask(pool_current.eq(""), pd.NA)
+        pool_fallback = emp_base["pool_id_fallback"].astype("string").str.strip()
+        pool_fallback = pool_fallback.mask(pool_fallback.eq(""), pd.NA)
+        emp_base["pool_id"] = pool_current.fillna(pool_fallback).fillna("").astype(str)
         emp_base = emp_base.drop(columns=["reparto_id", "pool_id_fallback"])
 
     # 1) dipendenti del reparto dello slot

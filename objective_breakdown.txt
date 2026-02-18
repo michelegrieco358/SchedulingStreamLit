@@ -1,18 +1,18 @@
 Breakdown funzione obiettivo
-Valore totale funzione obiettivo: 10016630.000000
-Somma contributi calcolati: 10016630.000000
+Valore totale funzione obiettivo: 9670635.000000
+Somma contributi calcolati: 9670635.000000
 
 Dettaglio per componente:
-- ore_mensili_sotto: contributo=236790.000000 (2.36%), violazioni_equivalenti=31.321429 (4.89%), violazioni_raw=13155.000000 (quota turni: 10.47%)
-- ore_mensili_sopra: contributo=82890.000000 (0.83%), violazioni_equivalenti=10.964286 (1.71%), violazioni_raw=4605.000000 (quota turni: 3.67%)
-- bilancio_finale: contributo=319680.000000 (3.19%), violazioni_equivalenti=42.285714 (6.60%), violazioni_raw=17760.000000 (quota turni: 14.14%)
-- notti_consecutive: contributo=140000.000000 (1.40%), violazioni=14.000000 (2.18%)
-- recupero_singola_notte: contributo=550000.000000 (5.49%), violazioni=55.000000 (8.58%)
-- fairness_notti: contributo=61210.000000 (0.61%), violazioni_equivalenti=122.420000 (19.09%), violazioni_raw=12242.000000 (quota turni: 40.93%)
-- fairness_weekend: contributo=46060.000000 (0.46%), violazioni_equivalenti=92.120000 (14.37%), violazioni_raw=9212.000000 (quota turni: 30.80%)
-- riposo_11h: contributo=500000.000000 (4.99%), violazioni=5.000000 (0.78%)
-- riposo_settimanale: contributo=6000000.000000 (59.90%), violazioni=60.000000 (9.36%)
-- assegnazioni_cross: contributo=2080000.000000 (20.77%), violazioni=208.000000 (32.44%)
+- ore_mensili_sotto: contributo=336690.000000 (3.48%), violazioni_equivalenti=44.535714 (7.12%), violazioni_raw=18705.000000 (quota turni: 13.84%)
+- ore_mensili_sopra: contributo=91530.000000 (0.95%), violazioni_equivalenti=12.107143 (1.94%), violazioni_raw=5085.000000 (quota turni: 3.76%)
+- bilancio_finale: contributo=428220.000000 (4.43%), violazioni_equivalenti=56.642857 (9.05%), violazioni_raw=23790.000000 (quota turni: 17.61%)
+- notti_consecutive: contributo=150000.000000 (1.55%), violazioni=15.000000 (2.40%)
+- recupero_singola_notte: contributo=230000.000000 (2.38%), violazioni=23.000000 (3.68%)
+- fairness_notti: contributo=66500.000000 (0.69%), violazioni_equivalenti=133.000000 (21.26%), violazioni_raw=13300.000000 (quota turni: 41.35%)
+- fairness_weekend: contributo=37695.000000 (0.39%), violazioni_equivalenti=75.390000 (12.05%), violazioni_raw=7539.000000 (quota turni: 23.44%)
+- riposo_11h: contributo=300000.000000 (3.10%), violazioni=3.000000 (0.48%)
+- riposo_settimanale: contributo=6000000.000000 (62.04%), violazioni=60.000000 (9.59%)
+- assegnazioni_cross: contributo=2030000.000000 (20.99%), violazioni=203.000000 (32.44%)
 
-Totale violazioni (non pesate): 57316.000000
-Totale violazioni equivalenti (turni medi): 299.111429
+Totale violazioni (non pesate): 68723.000000
+Totale violazioni equivalenti (turni medi): 321.675714
