@@ -431,7 +431,7 @@ def test_enrich_employees_with_cross_policy_rejects_penalty_override(tmp_path: P
         },
     )
     cfg = load_config(str(cfg_path))
-    cfg["cross"] = {"max_shifts_month": 3, "penalty_weight": 1.0}
+    cfg["cross"] = {"allow_cross": True, "max_shifts_month": 3, "penalty_weight": 1.0}
 
     employees_df = pd.DataFrame(
         [
@@ -446,6 +446,59 @@ def test_enrich_employees_with_cross_policy_rejects_penalty_override(tmp_path: P
     )
 
     with pytest.raises(ValueError, match="cross_penalty_weight"):
+        enrich_employees_with_cross_policy(employees_df, cfg)
+
+
+def test_enrich_employees_with_cross_policy_force_disables_cross_when_allow_cross_false(
+    tmp_path: Path,
+) -> None:
+    cfg_path = _write_basic_config(
+        tmp_path,
+        defaults_extra={
+            "departments": ["dep"],
+        },
+    )
+    cfg = load_config(str(cfg_path))
+    cfg["cross"] = {"allow_cross": False, "max_shifts_month": 5, "penalty_weight": 1.0}
+
+    employees_df = pd.DataFrame(
+        [
+            {
+                "employee_id": "E1",
+                "nome": "Anna",
+                "role": "infermiere",
+                "reparto_id": "dep",
+                "cross_max_shifts_month": 9,
+            }
+        ]
+    )
+
+    enriched = enrich_employees_with_cross_policy(employees_df, cfg)
+    assert enriched.loc[0, "cross_max_shifts_month"] == 0
+
+
+def test_enrich_employees_with_cross_policy_rejects_non_boolean_allow_cross(tmp_path: Path) -> None:
+    cfg_path = _write_basic_config(
+        tmp_path,
+        defaults_extra={
+            "departments": ["dep"],
+        },
+    )
+    cfg = load_config(str(cfg_path))
+    cfg["cross"] = {"allow_cross": "yes", "max_shifts_month": 3, "penalty_weight": 1.0}
+
+    employees_df = pd.DataFrame(
+        [
+            {
+                "employee_id": "E1",
+                "nome": "Anna",
+                "role": "infermiere",
+                "reparto_id": "dep",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="allow_cross"):
         enrich_employees_with_cross_policy(employees_df, cfg)
 
 
@@ -1405,11 +1458,12 @@ def test_get_absence_hours_from_config_and_load_all_smoke(tmp_path: Path) -> Non
     assert not loaded.availability_df.empty
 
 
-def test_load_all_enables_cross_department_gap_pairs_when_cross_max_shifts_month_positive(
+def test_load_all_enables_cross_department_gap_pairs_when_allow_cross_true(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = yaml.safe_load((DATA_DIR / 'config.yaml').read_text(encoding='utf-8'))
-    cfg.setdefault('cross', {})['max_shifts_month'] = 2
+    cfg.setdefault('cross', {})['allow_cross'] = True
+    cfg.setdefault('cross', {})['max_shifts_month'] = 0
     cfg.setdefault('locks', {})['allow_cross_reparto'] = False
 
     cfg_path = tmp_path / 'config.yaml'
@@ -1438,11 +1492,12 @@ def test_load_all_enables_cross_department_gap_pairs_when_cross_max_shifts_month
     assert seen['include_cross_department'] is True
 
 
-def test_load_all_disables_cross_department_gap_pairs_when_cross_max_shifts_month_zero(
+def test_load_all_disables_cross_department_gap_pairs_when_allow_cross_false(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = yaml.safe_load((DATA_DIR / 'config.yaml').read_text(encoding='utf-8'))
-    cfg.setdefault('cross', {})['max_shifts_month'] = 0
+    cfg.setdefault('cross', {})['allow_cross'] = False
+    cfg.setdefault('cross', {})['max_shifts_month'] = 99
     cfg.setdefault('locks', {})['allow_cross_reparto'] = True
 
     cfg_path = tmp_path / 'config.yaml'

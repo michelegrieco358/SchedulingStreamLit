@@ -56,6 +56,23 @@ def _ensure_non_negative_default(
     return numeric_value if is_float else float(round(numeric_value))
 
 
+def is_cross_allowed(config: dict[str, Any]) -> bool:
+    """Return whether cross-department assignments are globally enabled."""
+
+    cross_cfg_raw = config.get("cross")
+    if cross_cfg_raw is None:
+        return False
+    if not isinstance(cross_cfg_raw, dict):
+        raise ValueError("config: sezione 'cross' mancante o non valida")
+
+    raw_value = cross_cfg_raw.get("allow_cross", False)
+    if raw_value is None:
+        raw_value = False
+    if not isinstance(raw_value, bool):
+        raise ValueError("config: 'cross.allow_cross' deve essere booleano (true/false)")
+    return raw_value
+
+
 def enrich_employees_with_cross_policy(
     employees: pd.DataFrame, config: dict[str, Any]
 ) -> pd.DataFrame:
@@ -68,11 +85,13 @@ def enrich_employees_with_cross_policy(
             "employees: colonne mancanti: " + ", ".join(sorted(missing))
         )
 
-    defaults = {
-        "cross_max_shifts_month": _ensure_non_negative_default(
-            config, "max_shifts_month", is_float=False
-        )
-    }
+    cross_allowed = is_cross_allowed(config)
+    default_limit = (
+        _ensure_non_negative_default(config, "max_shifts_month", is_float=False)
+        if cross_allowed
+        else 0.0
+    )
+    defaults = {"cross_max_shifts_month": default_limit}
 
     # Ensure the global penalty weight is valid even if overrides are forbidden.
     _ensure_non_negative_default(config, "penalty_weight", is_float=True)
@@ -114,7 +133,10 @@ def enrich_employees_with_cross_policy(
                 [float("nan")] * len(enriched), index=enriched.index, dtype="float64"
             )
 
-        filled = coerced.fillna(default_value)
+        if cross_allowed:
+            filled = coerced.fillna(default_value)
+        else:
+            filled = pd.Series(0.0, index=enriched.index, dtype="float64")
         enriched[column] = filled.astype(int)
 
     if "cross_max_shifts_month" not in enriched.columns:
