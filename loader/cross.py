@@ -16,12 +16,25 @@ def _normalise(series: pd.Series) -> pd.Series:
 def _ensure_non_negative_default(
     config: dict[str, Any], key: str, *, is_float: bool
 ) -> float:
-    if "cross" not in config or not isinstance(config["cross"], dict):
+    cross_cfg_raw = config.get("cross")
+    if cross_cfg_raw is None:
+        cross_cfg: dict[str, Any] = {}
+    elif isinstance(cross_cfg_raw, dict):
+        cross_cfg = cross_cfg_raw
+    else:
         raise ValueError("config: sezione 'cross' mancante o non valida")
 
-    value = config["cross"].get(key)
+    fallback_defaults: dict[str, float] = {
+        "max_shifts_month": 0.0,
+        "penalty_weight": 0.0,
+    }
+
+    value = cross_cfg.get(key)
     if value is None:
-        raise ValueError(f"config: valore predefinito mancante per '{key}'")
+        if key in fallback_defaults:
+            value = fallback_defaults[key]
+        else:
+            raise ValueError(f"config: valore predefinito mancante per '{key}'")
 
     try:
         numeric_value = float(value)
@@ -357,4 +370,3 @@ def cross_reporting(candidate_assignments_ok: pd.DataFrame) -> dict[str, pd.Data
         "flow_matrix": flow_matrix,
         "employee_summary": employee_summary,
     }
-

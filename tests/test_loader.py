@@ -397,6 +397,32 @@ def test_load_employees_applies_default_hour_caps(tmp_path: Path) -> None:
     assert row["max_week_min"] == expected_week_cap_min
 
 
+
+
+def test_enrich_employees_with_cross_policy_uses_safe_defaults_when_cross_missing(tmp_path: Path) -> None:
+    cfg_path = _write_basic_config(
+        tmp_path,
+        defaults_extra={
+            "departments": ["dep"],
+        },
+    )
+    cfg = load_config(str(cfg_path))
+    cfg.pop("cross", None)
+
+    employees_df = pd.DataFrame(
+        [
+            {
+                "employee_id": "E1",
+                "nome": "Anna",
+                "role": "infermiere",
+                "reparto_id": "dep",
+            }
+        ]
+    )
+
+    enriched = enrich_employees_with_cross_policy(employees_df, cfg)
+    assert enriched.loc[0, "cross_max_shifts_month"] == 0
+
 def test_enrich_employees_with_cross_policy_rejects_penalty_override(tmp_path: Path) -> None:
     cfg_path = _write_basic_config(
         tmp_path,
@@ -1389,12 +1415,12 @@ def test_get_absence_hours_from_config_and_load_all_smoke(tmp_path: Path) -> Non
     assert not loaded.availability_df.empty
 
 
-def test_load_all_enables_cross_department_gap_pairs_when_cross_reparto_enabled(
+def test_load_all_enables_cross_department_gap_pairs_when_cross_max_shifts_month_positive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = yaml.safe_load((DATA_DIR / 'config.yaml').read_text(encoding='utf-8'))
-    cfg.setdefault('locks', {})['allow_cross_reparto'] = True
-    cfg.setdefault('rest_rules', {})['include_cross_department_pairs'] = False
+    cfg.setdefault('cross', {})['max_shifts_month'] = 2
+    cfg.setdefault('locks', {})['allow_cross_reparto'] = False
 
     cfg_path = tmp_path / 'config.yaml'
     cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
@@ -1422,12 +1448,12 @@ def test_load_all_enables_cross_department_gap_pairs_when_cross_reparto_enabled(
     assert seen['include_cross_department'] is True
 
 
-def test_load_all_disables_cross_department_gap_pairs_when_cross_reparto_disabled(
+def test_load_all_disables_cross_department_gap_pairs_when_cross_max_shifts_month_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = yaml.safe_load((DATA_DIR / 'config.yaml').read_text(encoding='utf-8'))
-    cfg.setdefault('locks', {})['allow_cross_reparto'] = False
-    cfg.setdefault('rest_rules', {})['include_cross_department_pairs'] = True
+    cfg.setdefault('cross', {})['max_shifts_month'] = 0
+    cfg.setdefault('locks', {})['allow_cross_reparto'] = True
 
     cfg_path = tmp_path / 'config.yaml'
     cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
