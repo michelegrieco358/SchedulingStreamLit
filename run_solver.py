@@ -60,8 +60,8 @@ def main() -> None:
     parser.add_argument(
         "--max-time",
         type=float,
-        default=3600,
-        help="Tempo massimo in secondi per il solver CP-SAT (default: 3600).",
+        default=600,
+        help="Tempo massimo in secondi per il solver CP-SAT (default: 600).",
     )
     args = parser.parse_args()
 

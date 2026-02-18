@@ -1,9 +1,5 @@
 reparto_id,shift_code,enabled,start_override,end_override,duration_override
 ADT,G,true,08:00,17:15,
-MED,G,true,00:00,23:59,360
-MED,N,true,20:00,08:00,720
-MEDG,G,true,00:00,23:59,360
-MEDG,N,true,20:00,08:00,720
 REP0,G,true,07:00,22:00,450
 REP0,M,true,08:00,16:00,
 REP0,N,true,,,
@@ -17,5 +13,3 @@ REP3,P,true,,,420
 REP5,M,true,,,420
 REP5,N,true,,,
 REP5,P,true,,,420
-RIA,G,true,,16:30,420
-RIA2,G,true,,16:30,420

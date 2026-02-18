@@ -494,14 +494,9 @@ def load_employees(
             original_value = row["rest11h_max_monthly_exceptions"]
             raw_value = str(original_value).strip()
             if raw_value == "":
-                logger.warning(
+                logger.debug(
                     "employees.csv: rest11h_max_monthly_exceptions vuoto per dipendente %s: "
                     "uso default %s",
-                    employee_id,
-                    global_rest11h_monthly,
-                )
-                logger.info(
-                    "employees.csv: rest11h_max_monthly_exceptions default applicato per dipendente %s: %s",
                     employee_id,
                     global_rest11h_monthly,
                 )
@@ -535,7 +530,7 @@ def load_employees(
                     monthly_value,
                 )
         else:
-            logger.info(
+            logger.debug(
                 "employees.csv: rest11h_max_monthly_exceptions default applicato per dipendente %s: %s",
                 employee_id,
                 global_rest11h_monthly,
@@ -546,14 +541,9 @@ def load_employees(
             original_value = row["rest11h_max_consecutive_exceptions"]
             raw_value = str(original_value).strip()
             if raw_value == "":
-                logger.warning(
+                logger.debug(
                     "employees.csv: rest11h_max_consecutive_exceptions vuoto per dipendente %s: "
                     "uso default %s",
-                    employee_id,
-                    global_rest11h_consecutive,
-                )
-                logger.info(
-                    "employees.csv: rest11h_max_consecutive_exceptions default applicato per dipendente %s: %s",
                     employee_id,
                     global_rest11h_consecutive,
                 )
@@ -587,7 +577,7 @@ def load_employees(
                     consecutive_value,
                 )
         else:
-            logger.info(
+            logger.debug(
                 "employees.csv: rest11h_max_consecutive_exceptions default applicato per dipendente %s: %s",
                 employee_id,
                 global_rest11h_consecutive,
