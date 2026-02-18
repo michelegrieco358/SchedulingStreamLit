@@ -178,10 +178,17 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
         ]
         or [15]
     )
+    cross_cfg = cfg.get("cross") if isinstance(cfg.get("cross"), dict) else {}
+    cross_max_shifts_month = cross_cfg.get("max_shifts_month", 0)
+    try:
+        cross_max_shifts_month_value = float(cross_max_shifts_month)
+    except (TypeError, ValueError):
+        cross_max_shifts_month_value = 0.0
+
     gap_pairs_df = build_gap_pairs(
         shift_slots_df,
         max_check_window_h=int(max_gap_window),
-        include_cross_department=bool((cfg.get("locks") or {}).get("allow_cross_reparto", False)),
+        include_cross_department=(cross_max_shifts_month_value > 0),
         add_debug=False,
     )
 
