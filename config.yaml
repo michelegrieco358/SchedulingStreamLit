@@ -67,6 +67,7 @@ shift_types:
   night_codes: ["N"]
 
 cross:
+  allow_cross: true
   max_shifts_month: 6
   penalty_weight: 10.0
 

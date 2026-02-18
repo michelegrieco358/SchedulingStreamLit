@@ -23,6 +23,7 @@ from .candidate_assignments import build_candidate_assignments
 from .cross import (
     cross_reporting,
     enrich_employees_with_cross_policy,
+    is_cross_allowed,
     validate_candidates_cross,
 )
 from .config import load_config, load_holidays
@@ -178,17 +179,12 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
         ]
         or [15]
     )
-    cross_cfg = cfg.get("cross") if isinstance(cfg.get("cross"), dict) else {}
-    cross_max_shifts_month = cross_cfg.get("max_shifts_month", 0)
-    try:
-        cross_max_shifts_month_value = float(cross_max_shifts_month)
-    except (TypeError, ValueError):
-        cross_max_shifts_month_value = 0.0
+    cross_allowed = is_cross_allowed(cfg)
 
     gap_pairs_df = build_gap_pairs(
         shift_slots_df,
         max_check_window_h=int(max_gap_window),
-        include_cross_department=(cross_max_shifts_month_value > 0),
+        include_cross_department=cross_allowed,
         add_debug=False,
     )
 
