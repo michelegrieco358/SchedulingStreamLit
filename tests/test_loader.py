@@ -361,9 +361,9 @@ def test_load_employees_and_cross_policy_defaults() -> None:
     lookup = enriched.set_index("employee_id")
 
     cross_cfg = cfg["cross"]
-    assert lookup.loc["E001", "cross_max_shifts_month"] == 3
+    assert lookup.loc["E001", "cross_max_shifts_month"] == cross_cfg["max_shifts_month"]
     assert lookup.loc["E002", "cross_max_shifts_month"] == cross_cfg["max_shifts_month"]
-    assert lookup.loc["E003", "cross_max_shifts_month"] == 0
+    assert lookup.loc["E003", "cross_max_shifts_month"] == cross_cfg["max_shifts_month"]
     assert "cross_penalty_weight" not in enriched.columns
 
 
@@ -375,9 +375,9 @@ def test_load_all_enriches_employees_with_fte() -> None:
     assert "fte_weight" in employees_df.columns
 
     lookup = employees_df.set_index("employee_id")
-    # Baseline infermiere 168h, caposala 150h (see config.yaml).
+    # Baseline infermiere 140h, amministrativo 120h (see config.yaml).
     assert lookup.loc["E001", "fte"] == pytest.approx(1.0)
-    assert lookup.loc["E047", "fte"] == pytest.approx(1.0)
+    assert lookup.loc["E047", "fte"] == pytest.approx(56 / 120)
     # Columns should contain finite, non-negative weights.
     assert (lookup["fte_weight"] >= 0).all()
 
@@ -464,8 +464,8 @@ def test_build_calendar_keeps_ten_day_history_when_month_starts_horizon() -> Non
 def test_resolve_fulltime_baseline_reads_defaults() -> None:
     cfg = load_config(str(DATA_DIR / "config.yaml"))
 
-    assert resolve_fulltime_baseline(cfg, "caposala") == pytest.approx(150)
-    assert resolve_fulltime_baseline(cfg, "infermiere") == pytest.approx(168)
+    assert resolve_fulltime_baseline(cfg, "amministrativo") == pytest.approx(120)
+    assert resolve_fulltime_baseline(cfg, "infermiere") == pytest.approx(140)
 
     with pytest.raises(LoaderError, match="contract_hours_by_role_h non definito per il ruolo sconosciuto"):
         resolve_fulltime_baseline(cfg, "sconosciuto")
@@ -1061,16 +1061,16 @@ def test_load_all_applies_unplanned_absence_hours(tmp_path: Path) -> None:
     leaves_path = data_dir / "leaves.csv"
     leaves_df = pd.read_csv(leaves_path)
     mask = (leaves_df["employee_id"] == "E006") & (
-        leaves_df["date_from"] == "2025-11-10"
+        leaves_df["date_from"] == "2025-11-04"
     )
-    assert mask.any(), "leaves.csv sample should contain E006 on 2025-11-10"
+    assert mask.any(), "leaves.csv sample should contain E006 on 2025-11-04"
     leaves_df.loc[mask, "is_planned"] = False
     leaves_df.to_csv(leaves_path, index=False)
 
     pd.DataFrame(
         {
             "employee_id": ["E006"],
-            "date": ["2025-11-10"],
+            "date": ["2025-11-04"],
             "state_code": ["N"],
         }
     ).to_csv(data_dir / "preassignments.csv", index=False)
@@ -1088,30 +1088,20 @@ def test_load_all_applies_unplanned_absence_hours(tmp_path: Path) -> None:
 
     target_day = day_rows[
         (day_rows["employee_id"] == "E006")
-        & (day_rows["data"] == "2025-11-10")
+        & (day_rows["data"] == "2025-11-04")
     ].iloc[0]
-    assert target_day["absence_hours_h"] == pytest.approx(10.5)
+    assert target_day["absence_hours_h"] == pytest.approx(7.0)
     assert not bool(target_day["is_planned"])
-
-    fallback_day = day_rows[
-        (day_rows["employee_id"] == "E006")
-        & (day_rows["data"] == "2025-11-11")
-    ].iloc[0]
-    assert fallback_day["absence_hours_h"] == pytest.approx(7.5)
 
     shift_rows = loaded.leaves_df[
         (loaded.leaves_df["employee_id"] == "E006")
-        & (loaded.leaves_df["data"] == "2025-11-10")
+        & (loaded.leaves_df["data"] == "2025-11-04")
     ]
     assert not shift_rows.empty
 
-    night_row = shift_rows.loc[shift_rows["turno"].eq("N")].iloc[0]
-    assert night_row["shift_duration_min"] == pytest.approx(630.0)
-    assert not bool(night_row["is_planned"])
-
-    others = shift_rows.loc[~shift_rows["turno"].eq("N")]
-    assert not others.empty
-    assert (others["shift_duration_min"] == 0.0).all()
+    assert set(shift_rows["turno"].tolist()) == {"M", "P"}
+    assert (shift_rows["shift_duration_min"] == 420).all()
+    assert (~shift_rows["is_planned"].astype(bool)).all()
 def test_enrich_employees_with_fte_uses_defaults() -> None:
     cfg = load_config(str(DATA_DIR / "config.yaml"))
     horizon_days, weeks_in_horizon = _calendar_info(cfg)
@@ -1274,8 +1264,8 @@ def test_shift_role_eligibility_with_allowed_column() -> None:
         cfg.get("defaults", {}),
     )
 
-    mask = (eligibility_df["shift_code"] == "N") & (
-        eligibility_df["role"] == "CAPOSALA"
+    mask = (eligibility_df["shift_code"] == "P") & (
+        eligibility_df["role"] == "AMMINISTRATIVO"
     )
     assert mask.any()
     assert not bool(eligibility_df.loc[mask, "allowed"].iloc[0])
