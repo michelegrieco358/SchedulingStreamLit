@@ -6,7 +6,7 @@ from typing import Iterable, Set
 import pandas as pd
 
 
-TURNI_DOMANDA: Set[str] = {"M", "P", "N"}
+TURNI_DOMANDA: Set[str] = {"M", "P", "N", "G"}
 
 
 class LoaderError(Exception):

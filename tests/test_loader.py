@@ -185,6 +185,52 @@ def _empty_dept_map_df() -> pd.DataFrame:
     )
 
 
+def test_build_shift_slots_keeps_g_shift_enabled_without_override() -> None:
+    shifts_df = _basic_shifts_catalog()
+    shifts_df = pd.concat(
+        [
+            shifts_df,
+            pd.DataFrame(
+                [
+                    {
+                        "shift_id": "G",
+                        "start": "08:30",
+                        "end": "17:00",
+                        "break_min": 0,
+                        "duration_min": 510,
+                        "crosses_midnight": 0,
+                        "start_time": pd.to_timedelta(8, unit="h") + pd.to_timedelta(30, unit="m"),
+                        "end_time": pd.to_timedelta(17, unit="h"),
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    month_plan_df = pd.DataFrame(
+        [
+            {
+                "data": "2025-01-01",
+                "data_dt": pd.Timestamp("2025-01-01"),
+                "reparto_id": "DEP",
+                "shift_code": "G",
+                "coverage_code": "COV",
+            }
+        ]
+    )
+    defaults = {"departments": ["DEP"]}
+
+    slots_df = build_shift_slots(
+        month_plan_df,
+        shifts_df,
+        _empty_dept_map_df(),
+        defaults,
+    )
+
+    assert not slots_df.empty
+    assert slots_df.loc[0, "shift_code"] == "G"
+
+
 def test_build_shift_slots_keeps_standard_shifts_enabled_without_override() -> None:
     shifts_df = _basic_shifts_catalog()
     month_plan_df = pd.DataFrame(

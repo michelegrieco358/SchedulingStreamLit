@@ -156,6 +156,45 @@ def test_state_requires_assignment() -> None:
     assert solver.Value(artifacts.assign_vars[(0, 0)]) == 1
 
 
+def test_assignment_implies_matching_g_state() -> None:
+    leaves = pd.DataFrame(columns=["employee_id", "date"])
+    slots = pd.DataFrame(
+        {
+            "slot_id": [1],
+            "shift_code": ["G"],
+            "date": [pd.Timestamp("2025-01-01")],
+        }
+    )
+    context = _make_basic_context(leaves, slots=slots)
+    artifacts = build_model(context)
+
+    assign_var = artifacts.assign_vars[(0, 0)]
+    artifacts.model.Add(assign_var == 1)
+
+    solver = _solve_model(artifacts)
+
+    assert solver.Value(artifacts.state_vars[(0, 0, "G")]) == 1
+
+
+def test_g_state_requires_g_assignment() -> None:
+    leaves = pd.DataFrame(columns=["employee_id", "date"])
+    slots = pd.DataFrame(
+        {
+            "slot_id": [1],
+            "shift_code": ["G"],
+            "date": [pd.Timestamp("2025-01-01")],
+        }
+    )
+    context = _make_basic_context(leaves, slots=slots)
+    artifacts = build_model(context)
+
+    artifacts.model.Add(artifacts.state_vars[(0, 0, "G")] == 1)
+
+    solver = _solve_model(artifacts)
+
+    assert solver.Value(artifacts.assign_vars[(0, 0)]) == 1
+
+
 def test_state_zero_if_no_matching_slot() -> None:
     leaves = pd.DataFrame(columns=["employee_id", "date"])
     slots = pd.DataFrame(
