@@ -212,6 +212,30 @@ def test_state_zero_if_no_matching_slot() -> None:
     assert solver.Value(artifacts.state_vars[(0, 0, "P")]) == 0
 
 
+def test_employee_cannot_have_two_shifts_same_day() -> None:
+    leaves = pd.DataFrame(columns=["employee_id", "date"])
+    slots = pd.DataFrame(
+        {
+            "slot_id": [1, 2],
+            "shift_code": ["M", "M"],
+            "date": [pd.Timestamp("2025-01-01"), pd.Timestamp("2025-01-01")],
+        }
+    )
+    context = _make_basic_context(
+        leaves,
+        slots=slots,
+        calendar_dates=[pd.Timestamp("2025-01-01")],
+    )
+    artifacts = build_model(context)
+
+    artifacts.model.Add(artifacts.assign_vars[(0, 0)] == 1)
+    artifacts.model.Add(artifacts.assign_vars[(0, 1)] == 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(artifacts.model)
+    assert status == cp_model.INFEASIBLE
+
+
 def test_preassignment_penalty_prefers_previous_state() -> None:
     leaves = pd.DataFrame(columns=["employee_id", "date"])
     slots = pd.DataFrame(
