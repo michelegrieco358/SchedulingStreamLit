@@ -63,6 +63,18 @@ def main() -> None:
         default=600,
         help="Tempo massimo in secondi per il solver CP-SAT (default: 600).",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed random per CP-SAT (default: non impostato).",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Numero di worker CP-SAT (default: comportamento OR-Tools).",
+    )
     args = parser.parse_args()
 
     # Ignora l'avviso informativo sui locks mancanti, utile in ambiente POC.
@@ -84,6 +96,10 @@ def main() -> None:
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = args.max_time
+    if args.seed is not None:
+        solver.parameters.random_seed = int(args.seed)
+    if args.num_workers is not None:
+        solver.parameters.num_search_workers = int(args.num_workers)
     callback = GapLoggingCallback()
 
     status = solver.SolveWithSolutionCallback(model, callback)

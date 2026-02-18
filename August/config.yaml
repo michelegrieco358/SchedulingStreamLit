@@ -3,7 +3,6 @@ horizon:
   end_date: 2024-08-31
 rest_rules:
   min_between_shifts_h: 11
-preassignments: {}
 
 weights:
   rest11: 100.0
@@ -53,9 +52,7 @@ defaults:
     can_work_night: true
     max_per_week: 2
     max_per_month: 8
-  fairness:
-    night_weight: 0.5
-    weekend_weight: 0.5
+
 roles:
   IP:
     can_work_night: true
