@@ -217,6 +217,120 @@ def load_config(path: str) -> dict[str, Any]:
         defaults.get("fairness"), "config: defaults.fairness"
     )
 
+    def _coerce_non_negative_weight(raw: Any, label: str) -> float:
+        if raw in (None, ""):
+            return 0.0
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise LoaderError(f"{label} deve essere un numero >= 0 (trovato: {raw!r})") from exc
+        if value < 0:
+            raise LoaderError(f"{label} deve essere un numero >= 0 (trovato: {raw!r})")
+        return float(value)
+
+    weights_cfg = cfg.get("weights")
+    if weights_cfg is None:
+        weights_cfg = {}
+    if not isinstance(weights_cfg, dict):
+        raise LoaderError("config: weights deve essere un dizionario")
+
+    rest_rules_cfg = cfg.get("rest_rules") if isinstance(cfg.get("rest_rules"), dict) else {}
+    preassign_cfg = cfg.get("preassignments") if isinstance(cfg.get("preassignments"), dict) else {}
+    global_fairness_cfg = cfg.get("fairness") if isinstance(cfg.get("fairness"), dict) else {}
+    balance_cfg = defaults.get("balance") if isinstance(defaults.get("balance"), dict) else {}
+    night_cfg = defaults.get("night") if isinstance(defaults.get("night"), dict) else {}
+    defaults_fairness_cfg = defaults.get("fairness") if isinstance(defaults.get("fairness"), dict) else {}
+    cross_cfg = cfg.get("cross") if isinstance(cfg.get("cross"), dict) else {}
+
+    def _pick(*values: Any) -> Any:
+        for value in values:
+            if value is not None and value != "":
+                return value
+        return None
+
+    normalized_weights = {
+        "rest11": _coerce_non_negative_weight(
+            _pick(weights_cfg.get("rest11"), rest_rules_cfg.get("rest11_penalty_weight")),
+            "config: weights.rest11",
+        ),
+        "weekly_rest": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("weekly_rest"),
+                rest_rules_cfg.get("weekly_rest_penalty_weight"),
+            ),
+            "config: weights.weekly_rest",
+        ),
+        "preassignment_change": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("preassignment_change"),
+                preassign_cfg.get("change_penalty_weight"),
+            ),
+            "config: weights.preassignment_change",
+        ),
+        "night_extra_consecutive": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("night_extra_consecutive"),
+                night_cfg.get("extra_consecutive_penalty_weight"),
+            ),
+            "config: weights.night_extra_consecutive",
+        ),
+        "night_single_recovery": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("night_single_recovery"),
+                night_cfg.get("single_night_recovery_penalty_weight"),
+            ),
+            "config: weights.night_single_recovery",
+        ),
+        "cross": _coerce_non_negative_weight(
+            _pick(weights_cfg.get("cross"), cross_cfg.get("penalty_weight")),
+            "config: weights.cross",
+        ),
+        "due_hours": _coerce_non_negative_weight(
+            _pick(weights_cfg.get("due_hours"), balance_cfg.get("due_hours_penalty_weight")),
+            "config: weights.due_hours",
+        ),
+        "due_hours_under": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("due_hours_under"),
+                balance_cfg.get("due_hours_under_penalty_weight"),
+                weights_cfg.get("due_hours"),
+                balance_cfg.get("due_hours_penalty_weight"),
+            ),
+            "config: weights.due_hours_under",
+        ),
+        "due_hours_over": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("due_hours_over"),
+                balance_cfg.get("due_hours_over_penalty_weight"),
+                weights_cfg.get("due_hours"),
+                balance_cfg.get("due_hours_penalty_weight"),
+            ),
+            "config: weights.due_hours_over",
+        ),
+        "final_balance": _coerce_non_negative_weight(
+            _pick(weights_cfg.get("final_balance"), balance_cfg.get("final_balance_penalty_weight")),
+            "config: weights.final_balance",
+        ),
+        "fairness_night": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("fairness_night"),
+                global_fairness_cfg.get("night_weight"),
+                defaults_fairness_cfg.get("night_weight"),
+            ),
+            "config: weights.fairness_night",
+        ),
+        "fairness_weekend": _coerce_non_negative_weight(
+            _pick(
+                weights_cfg.get("fairness_weekend"),
+                global_fairness_cfg.get("weekend_weight"),
+                defaults_fairness_cfg.get("weekend_weight"),
+            ),
+            "config: weights.fairness_weekend",
+        ),
+    }
+
+    cfg["weights"] = normalized_weights
+
     return cfg
 
 

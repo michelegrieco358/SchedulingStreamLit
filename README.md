@@ -65,20 +65,26 @@ grandezze da usare nei vincoli del solver:
 Gli stessi controlli sono replicati nello script `scripts/check_data.py`, in
 modo da intercettare eventuali override errati prima dell'esecuzione del loader.
 
-## Pesi delle penalit��
+## Pesi delle penalità
 
-Il file `config.yaml` espone i pesi di tutte le penalit�� soft del modello, cos�� da
-permettere il tuning senza modifiche al codice:
+Il file `config.yaml` espone una sezione unica `weights` con tutti i pesi delle
+penalità soft del modello, così da permettere il tuning senza modifiche al
+codice.
 
-- `fairness.night_weight` e `fairness.weekend_weight` controllano
-  rispettivamente la distribuzione equa dei turni notturni e dei weekend/festivi.
-- `night.single_night_recovery_penalty_weight` regola le penalit�� sui pattern post-notte.
-- Restano invariati i pesi gi�� presenti
-  (`rest_rules.rest11_penalty_weight`, `rest_rules.weekly_rest_penalty_weight`,
-  `night.extra_consecutive_penalty_weight`, `cross.penalty_weight`,
-  `preassignments.change_penalty_weight`,
-  `defaults.balance.due_hours_penalty_weight`,
-  `defaults.balance.final_balance_penalty_weight`).
+Chiavi disponibili:
+
+- `weights.fairness_night` e `weights.fairness_weekend` per la fairness su
+  notti e weekend/festivi.
+- `weights.night_single_recovery` per i pattern post-notte.
+- `weights.rest11` e `weights.weekly_rest` per i vincoli di riposo.
+- `weights.night_extra_consecutive` per la penalità sulle notti consecutive
+  oltre soglia.
+- `weights.cross` per i turni cross-reparto.
+- `weights.preassignment_change` per la stabilità rispetto alle preassegnazioni.
+- `weights.due_hours`, `weights.due_hours_under`, `weights.due_hours_over` e
+  `weights.final_balance` per l'equilibrio ore.
 
 Tutti i valori devono essere numeri non negativi; impostando un peso a `0` la
-relativa penalit�� viene disattivata.
+relativa penalità viene disattivata.
+
+Per retrocompatibilità, i vecchi campi sono ancora accettati in lettura.
