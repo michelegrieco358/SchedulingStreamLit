@@ -860,6 +860,14 @@ def _resolve_night_fairness_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
 
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "fairness_night" in weights_cfg:
+        raw = weights_cfg.get("fairness_night")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _extract(mapping: Mapping[str, Any] | None) -> float | None:
         return _pick_float_from_mapping(
             mapping,
@@ -887,6 +895,14 @@ def _resolve_night_fairness_weight(cfg: Mapping[str, Any] | None) -> float:
 def _resolve_weekend_fairness_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
+
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "fairness_weekend" in weights_cfg:
+        raw = weights_cfg.get("fairness_weekend")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     fairness_cfg = cfg.get("fairness") if isinstance(cfg.get("fairness"), Mapping) else None
     candidates = [
@@ -2019,6 +2035,13 @@ def _add_hour_constraints(
 def _resolve_due_hours_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "due_hours" in weights_cfg:
+        raw = weights_cfg.get("due_hours")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
     defaults = cfg.get("defaults") if isinstance(cfg.get("defaults"), Mapping) else None
     if defaults is None:
         return 0.0
@@ -2041,6 +2064,22 @@ def _resolve_due_hour_penalty_weights(
     base = _resolve_due_hours_penalty_weight(cfg)
     under_weight = base
     over_weight = base
+
+    if isinstance(cfg, Mapping):
+        weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+        if isinstance(weights_cfg, Mapping):
+            under_raw = weights_cfg.get("due_hours_under")
+            over_raw = weights_cfg.get("due_hours_over")
+            if under_raw is not None:
+                try:
+                    under_weight = max(float(under_raw), 0.0)
+                except (TypeError, ValueError):
+                    under_weight = base
+            if over_raw is not None:
+                try:
+                    over_weight = max(float(over_raw), 0.0)
+                except (TypeError, ValueError):
+                    over_weight = base
 
     if isinstance(cfg, Mapping):
         defaults = cfg.get("defaults") if isinstance(cfg.get("defaults"), Mapping) else None
@@ -2095,6 +2134,13 @@ def _resolve_due_hours_deadband(cfg: Mapping[str, Any] | None) -> int:
 def _resolve_final_balance_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "final_balance" in weights_cfg:
+        raw = weights_cfg.get("final_balance")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
     defaults = cfg.get("defaults") if isinstance(cfg.get("defaults"), Mapping) else None
     if defaults is None:
         return 0.0
@@ -2145,6 +2191,13 @@ def _extract_start_balance_series(context: ModelContext) -> pd.Series:
 def _resolve_cross_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "cross" in weights_cfg:
+        raw = weights_cfg.get("cross")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
     cross_cfg = cfg.get("cross") if isinstance(cfg.get("cross"), Mapping) else None
     if cross_cfg is None:
         return 0.0
@@ -3467,6 +3520,14 @@ def _resolve_consecutive_night_penalty_weight(cfg: Mapping[str, Any] | None) -> 
     if not isinstance(cfg, Mapping):
         return 0.0
 
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "night_extra_consecutive" in weights_cfg:
+        raw = weights_cfg.get("night_extra_consecutive")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _extract(mapping: Mapping[str, Any] | None) -> float | None:
         if not isinstance(mapping, Mapping):
             return None
@@ -3505,6 +3566,14 @@ def _resolve_single_night_recovery_penalty_weight(cfg: Mapping[str, Any] | None)
     if not isinstance(cfg, Mapping):
         return 0.0
 
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "night_single_recovery" in weights_cfg:
+        raw = weights_cfg.get("night_single_recovery")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _extract(mapping: Mapping[str, Any] | None) -> float | None:
         if not isinstance(mapping, Mapping):
             return None
@@ -3541,6 +3610,14 @@ def _resolve_single_night_recovery_penalty_weight(cfg: Mapping[str, Any] | None)
 def _resolve_rest11_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
+
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "rest11" in weights_cfg:
+        raw = weights_cfg.get("rest11")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _extract(mapping: Mapping[str, Any] | None) -> float | None:
         if not isinstance(mapping, Mapping):
@@ -3579,6 +3656,14 @@ def _resolve_rest11_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
 def _resolve_weekly_rest_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
+
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "weekly_rest" in weights_cfg:
+        raw = weights_cfg.get("weekly_rest")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _extract(mapping: Mapping[str, Any] | None) -> float | None:
         if not isinstance(mapping, Mapping):
@@ -3622,6 +3707,14 @@ def _resolve_weekly_rest_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
 def _resolve_preassignment_penalty_weight(cfg: Mapping[str, Any] | None) -> float:
     if not isinstance(cfg, Mapping):
         return 0.0
+
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+    if isinstance(weights_cfg, Mapping) and "preassignment_change" in weights_cfg:
+        raw = weights_cfg.get("preassignment_change")
+        try:
+            return max(float(raw), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _extract(mapping: Mapping[str, Any] | None) -> float | None:
         if not isinstance(mapping, Mapping):

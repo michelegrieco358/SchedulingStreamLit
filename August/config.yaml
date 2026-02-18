@@ -3,10 +3,22 @@ horizon:
   end_date: 2024-08-31
 rest_rules:
   min_between_shifts_h: 11
-  rest11_penalty_weight: 100.0
-  weekly_rest_penalty_weight: 100.0
-preassignments:
-  change_penalty_weight: 5.0
+preassignments: {}
+
+weights:
+  rest11: 100.0
+  weekly_rest: 100.0
+  preassignment_change: 5.0
+  night_extra_consecutive: 10.0
+  night_single_recovery: 10.0
+  cross: 10.0
+  due_hours: 5.0
+  due_hours_under: 5.0
+  due_hours_over: 5.0
+  final_balance: 5.0
+  fairness_night: 0.5
+  fairness_weekend: 0.5
+
 defaults:
   allowed_roles:
   - IP
@@ -36,15 +48,11 @@ defaults:
     group_cap_default: 1
   balance:
     max_balance_delta_month_h: 36
-    due_hours_penalty_weight: 5.0
-    final_balance_penalty_weight: 5.0
   night:
     max_consecutive_nights: 3
     can_work_night: true
     max_per_week: 2
     max_per_month: 8
-    extra_consecutive_penalty_weight: 10.0
-    single_night_recovery_penalty_weight: 10.0
   fairness:
     night_weight: 0.5
     weekend_weight: 0.5
@@ -59,6 +67,5 @@ shift_types:
 cross:
   allow_cross: true
   max_shifts_month: 15
-  penalty_weight: 10.0
 locks:
   allow_cross_reparto: true

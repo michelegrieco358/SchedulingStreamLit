@@ -1299,6 +1299,114 @@ def test_load_config_warns_on_weekly_rest_hours(tmp_path: Path) -> None:
     assert defaults["weekly_rest_min_days"] == 1
 
 
+def test_load_config_builds_normalized_weights_from_legacy_fields(tmp_path: Path) -> None:
+    cfg_path = _write_basic_config(
+        tmp_path,
+        {
+            "balance": {
+                "due_hours_penalty_weight": 4.0,
+                "final_balance_penalty_weight": 7.0,
+            },
+            "night": {
+                "can_work_night": True,
+                "max_per_week": 2,
+                "max_per_month": 8,
+                "extra_consecutive_penalty_weight": 11.0,
+                "single_night_recovery_penalty_weight": 13.0,
+            },
+            "fairness": {"night_weight": 0.8, "weekend_weight": 0.9},
+        },
+    )
+    cfg_dict = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    cfg_dict["rest_rules"] = {
+        "rest11_penalty_weight": 100.0,
+        "weekly_rest_penalty_weight": 101.0,
+    }
+    cfg_dict["preassignments"] = {"change_penalty_weight": 6.0}
+    cfg_dict["fairness"] = {"night_weight": 0.8, "weekend_weight": 0.9}
+    cfg_dict["cross"] = {"allow_cross": True, "max_shifts_month": 3, "penalty_weight": 12.0}
+    cfg_path.write_text(yaml.safe_dump(cfg_dict, sort_keys=False), encoding="utf-8")
+
+    cfg = load_config(str(cfg_path))
+
+    assert cfg["weights"]["rest11"] == pytest.approx(100.0)
+    assert cfg["weights"]["weekly_rest"] == pytest.approx(101.0)
+    assert cfg["weights"]["preassignment_change"] == pytest.approx(6.0)
+    assert cfg["weights"]["night_extra_consecutive"] == pytest.approx(11.0)
+    assert cfg["weights"]["night_single_recovery"] == pytest.approx(13.0)
+    assert cfg["weights"]["cross"] == pytest.approx(12.0)
+    assert cfg["weights"]["due_hours"] == pytest.approx(4.0)
+    assert cfg["weights"]["due_hours_under"] == pytest.approx(4.0)
+    assert cfg["weights"]["due_hours_over"] == pytest.approx(4.0)
+    assert cfg["weights"]["final_balance"] == pytest.approx(7.0)
+    assert cfg["weights"]["fairness_night"] == pytest.approx(0.8)
+    assert cfg["weights"]["fairness_weekend"] == pytest.approx(0.9)
+
+
+def test_load_config_weights_override_legacy_fields(tmp_path: Path) -> None:
+    cfg_path = _write_basic_config(
+        tmp_path,
+        {
+            "balance": {
+                "due_hours_penalty_weight": 4.0,
+                "due_hours_under_penalty_weight": 5.0,
+                "due_hours_over_penalty_weight": 6.0,
+                "final_balance_penalty_weight": 7.0,
+            },
+            "night": {
+                "can_work_night": True,
+                "max_per_week": 2,
+                "max_per_month": 8,
+                "extra_consecutive_penalty_weight": 11.0,
+                "single_night_recovery_penalty_weight": 13.0,
+            },
+            "fairness": {"night_weight": 0.8, "weekend_weight": 0.9},
+        },
+    )
+    cfg_dict = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    cfg_dict.update(
+        {
+            "rest_rules": {
+                "rest11_penalty_weight": 100.0,
+                "weekly_rest_penalty_weight": 101.0,
+            },
+            "preassignments": {"change_penalty_weight": 6.0},
+            "fairness": {"night_weight": 0.8, "weekend_weight": 0.9},
+            "cross": {"allow_cross": True, "max_shifts_month": 3, "penalty_weight": 12.0},
+            "weights": {
+                "rest11": 200.0,
+                "weekly_rest": 201.0,
+                "preassignment_change": 16.0,
+                "night_extra_consecutive": 21.0,
+                "night_single_recovery": 23.0,
+                "cross": 22.0,
+                "due_hours": 14.0,
+                "due_hours_under": 15.0,
+                "due_hours_over": 17.0,
+                "final_balance": 27.0,
+                "fairness_night": 1.8,
+                "fairness_weekend": 1.9,
+            },
+        }
+    )
+    cfg_path.write_text(yaml.safe_dump(cfg_dict, sort_keys=False), encoding="utf-8")
+
+    cfg = load_config(str(cfg_path))
+
+    assert cfg["weights"]["rest11"] == pytest.approx(200.0)
+    assert cfg["weights"]["weekly_rest"] == pytest.approx(201.0)
+    assert cfg["weights"]["preassignment_change"] == pytest.approx(16.0)
+    assert cfg["weights"]["night_extra_consecutive"] == pytest.approx(21.0)
+    assert cfg["weights"]["night_single_recovery"] == pytest.approx(23.0)
+    assert cfg["weights"]["cross"] == pytest.approx(22.0)
+    assert cfg["weights"]["due_hours"] == pytest.approx(14.0)
+    assert cfg["weights"]["due_hours_under"] == pytest.approx(15.0)
+    assert cfg["weights"]["due_hours_over"] == pytest.approx(17.0)
+    assert cfg["weights"]["final_balance"] == pytest.approx(27.0)
+    assert cfg["weights"]["fairness_night"] == pytest.approx(1.8)
+    assert cfg["weights"]["fairness_weekend"] == pytest.approx(1.9)
+
+
 def test_shift_role_eligibility_with_allowed_column() -> None:
     cfg = load_config(str(DATA_DIR / "config.yaml"))
     horizon_days, weeks_in_horizon = _calendar_info(cfg)
