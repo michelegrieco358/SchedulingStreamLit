@@ -123,7 +123,7 @@ def _objective_fairness_coefficients(proto: cp_model.cp_model_pb2.CpModelProto) 
     return [
         (var_names.get(var_idx, ""), coeff)
         for var_idx, coeff in zip(proto.objective.vars, proto.objective.coeffs, strict=False)
-        if "weekend_fair_dev" in var_names.get(var_idx, "")
+        if "weekend_fair_dev_units" in var_names.get(var_idx, "")
     ]
 
 
@@ -144,8 +144,8 @@ def test_weekend_fairness_adds_objective_terms() -> None:
     assert expected_coeff > 0
     assert all(coeff == expected_coeff for _, coeff in fairness_terms)
     assert {name for name, _ in fairness_terms} == {
-        "weekend_fair_dev_e0_D1",
-        "weekend_fair_dev_e1_D1",
+        "weekend_fair_dev_units_e0_D1",
+        "weekend_fair_dev_units_e1_D1",
     }
 
 
@@ -157,4 +157,3 @@ def test_weekend_fairness_skips_departments_without_weekend_slots() -> None:
 
     fairness_terms = _objective_fairness_coefficients(proto)
     assert fairness_terms == []
-
