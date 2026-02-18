@@ -181,6 +181,7 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
     gap_pairs_df = build_gap_pairs(
         shift_slots_df,
         max_check_window_h=int(max_gap_window),
+        include_cross_department=bool((cfg.get("locks") or {}).get("allow_cross_reparto", False)),
         add_debug=False,
     )
 

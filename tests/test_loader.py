@@ -1387,3 +1387,69 @@ def test_get_absence_hours_from_config_and_load_all_smoke(tmp_path: Path) -> Non
     assert 'cross_penalty_weight' not in loaded.employees_df.columns
     assert not loaded.leaves_df.empty
     assert not loaded.availability_df.empty
+
+
+def test_load_all_enables_cross_department_gap_pairs_when_cross_reparto_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = yaml.safe_load((DATA_DIR / 'config.yaml').read_text(encoding='utf-8'))
+    cfg.setdefault('locks', {})['allow_cross_reparto'] = True
+    cfg.setdefault('rest_rules', {})['include_cross_department_pairs'] = False
+
+    cfg_path = tmp_path / 'config.yaml'
+    cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
+
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    for src in DATA_CSV_DIR.glob('*.csv'):
+        shutil.copy(src, data_dir / src.name)
+
+    seen: dict[str, object] = {}
+    import loader as loader_module
+
+    original = loader_module.build_gap_pairs
+
+    def _spy_build_gap_pairs(*args, **kwargs):
+        seen['include_cross_department'] = kwargs.get('include_cross_department')
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(loader_module, 'build_gap_pairs', _spy_build_gap_pairs)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=r'locks.csv: caricati .*', category=UserWarning)
+        load_all(str(cfg_path), str(data_dir))
+
+    assert seen['include_cross_department'] is True
+
+
+def test_load_all_disables_cross_department_gap_pairs_when_cross_reparto_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = yaml.safe_load((DATA_DIR / 'config.yaml').read_text(encoding='utf-8'))
+    cfg.setdefault('locks', {})['allow_cross_reparto'] = False
+    cfg.setdefault('rest_rules', {})['include_cross_department_pairs'] = True
+
+    cfg_path = tmp_path / 'config.yaml'
+    cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding='utf-8')
+
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    for src in DATA_CSV_DIR.glob('*.csv'):
+        shutil.copy(src, data_dir / src.name)
+
+    seen: dict[str, object] = {}
+    import loader as loader_module
+
+    original = loader_module.build_gap_pairs
+
+    def _spy_build_gap_pairs(*args, **kwargs):
+        seen['include_cross_department'] = kwargs.get('include_cross_department')
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(loader_module, 'build_gap_pairs', _spy_build_gap_pairs)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message=r'locks.csv: caricati .*', category=UserWarning)
+        load_all(str(cfg_path), str(data_dir))
+
+    assert seen['include_cross_department'] is False
