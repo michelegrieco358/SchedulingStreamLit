@@ -47,6 +47,7 @@ def build_gap_pairs(
     shift_slots: pd.DataFrame,
     max_check_window_h: int = 15,
     handover_minutes: int = 0,
+    include_cross_department: bool = False,
     *,
     add_debug: bool = True,
 ) -> pd.DataFrame:
@@ -100,7 +101,10 @@ def build_gap_pairs(
 
     result_frames: list[pd.DataFrame] = []
 
-    grouped = shift_slots.groupby("reparto_id", sort=False, dropna=False)
+    if include_cross_department:
+        grouped = [("__ALL__", shift_slots)]
+    else:
+        grouped = shift_slots.groupby("reparto_id", sort=False, dropna=False)
 
     for reparto_id, group in grouped:
         group_sorted = group.sort_values("start_dt").reset_index(drop=True)
@@ -151,11 +155,19 @@ def build_gap_pairs(
 
         gap_valid = gap_hours_eff[valid_mask]
 
+        s1_slots = group_sorted.iloc[s1_valid].reset_index(drop=True)
+        s2_slots = group_sorted.iloc[s2_valid].reset_index(drop=True)
+
+        if include_cross_department:
+            reparto_values = s1_slots["reparto_id"].to_numpy()
+        else:
+            reparto_values = np.full(len(gap_valid), reparto_id)
+
         pairs_df = pd.DataFrame(
             {
-                "reparto_id": reparto_id,
-                "s1_id": group_sorted["slot_id"].iloc[s1_valid].to_numpy(),
-                "s2_id": group_sorted["slot_id"].iloc[s2_valid].to_numpy(),
+                "reparto_id": reparto_values,
+                "s1_id": s1_slots["slot_id"].to_numpy(),
+                "s2_id": s2_slots["slot_id"].to_numpy(),
                 "gap_hours": gap_valid,
             }
         )
