@@ -100,6 +100,43 @@ def load_history(
 
     df = attach_calendar(df, calendar_df)
 
+    horizon_start = None
+    if "is_in_horizon" in calendar_df.columns and "data" in calendar_df.columns:
+        cal = calendar_df.copy()
+        in_horizon = cal["is_in_horizon"].astype("boolean", copy=False).fillna(False)
+        if in_horizon.any():
+            horizon_days = pd.to_datetime(cal.loc[in_horizon, "data"], errors="coerce")
+            if horizon_days.notna().any():
+                horizon_start = horizon_days.min().normalize()
+
+    if horizon_start is not None:
+        df = df.loc[df["data_dt"] < horizon_start].copy()
+
+    if df.empty:
+        return pd.DataFrame(
+            columns=[
+                "data",
+                "data_dt",
+                "employee_id",
+                "turno",
+                "shift_start_time",
+                "shift_end_time",
+                "shift_start_dt",
+                "shift_end_dt",
+                "shift_duration_min",
+                "shift_crosses_midnight",
+                "dow_iso",
+                "week_start_date",
+                "week_start_date_dt",
+                "week_id",
+                "week_idx",
+                "is_in_horizon",
+                "is_weekend",
+                "is_weekday_holiday",
+                "holiday_desc",
+            ]
+        )
+
     shift_cols = [
         "shift_id",
         "start_time",
