@@ -24,6 +24,8 @@ weights:
   final_balance: 5.0
   fairness_night: 0.1
   fairness_weekend: 0.1
+  coverage_under_role: 1000.0
+  coverage_under_group: 1200.0
 
 defaults:
   allowed_roles: ["infermiere", "oss", "medico", "amministrativo"]

@@ -327,6 +327,14 @@ def load_config(path: str) -> dict[str, Any]:
             ),
             "config: weights.fairness_weekend",
         ),
+        "coverage_under_role": _coerce_non_negative_weight(
+            weights_cfg.get("coverage_under_role"),
+            "config: weights.coverage_under_role",
+        ),
+        "coverage_under_group": _coerce_non_negative_weight(
+            weights_cfg.get("coverage_under_group"),
+            "config: weights.coverage_under_group",
+        ),
     }
 
     cfg["weights"] = normalized_weights
