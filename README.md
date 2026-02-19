@@ -43,6 +43,25 @@ dati. Per scegliere una destinazione alternativa è possibile indicare
 Il loader può essere integrato nel solver principale tramite la funzione
 `load_context` che restituisce un `ModelContext` pronto per la risoluzione.
 
+### Pianificazione su sottoinsieme reparti
+
+È possibile limitare la schedulazione a un sottoinsieme dei reparti configurati:
+
+- da CLI con `--departments`, passando un elenco separato da virgole
+  (es. `--departments degenza,ambulatorio`);
+- da configurazione con `scheduling.selected_departments` in `config.yaml`;
+- da UI Streamlit con il campo testuale "Reparti da includere (CSV, opzionale)".
+
+Quando la selezione è attiva, il loader filtra coerentemente i dati:
+
+- `employees` solo dei reparti selezionati;
+- `month_plan` e slot solo dei reparti selezionati;
+- vincoli/requirements/locks/history/assenze/preassignments solo relativi a
+  dipendenti e slot rimasti;
+- pool di copertura limitati ai reparti selezionati, evitando movimenti cross
+  verso reparti esclusi.
+
+
 ## Limiti orari caricati per dipendente
 
 Il loader normalizza tutti i valori orari in minuti e mette a disposizione tre

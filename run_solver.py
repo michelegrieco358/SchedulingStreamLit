@@ -75,6 +75,11 @@ def main() -> None:
         default=None,
         help="Numero di worker CP-SAT (default: comportamento OR-Tools).",
     )
+    parser.add_argument(
+        "--departments",
+        default="",
+        help="Lista reparti separati da virgola da includere nella schedulazione (default: tutti).",
+    )
     args = parser.parse_args()
 
     # Ignora l'avviso informativo sui locks mancanti, utile in ambiente POC.
@@ -89,9 +94,14 @@ def main() -> None:
         category=UserWarning,
     )
 
+    selected_departments = [
+        part.strip() for part in str(args.departments).split(",") if part.strip()
+    ]
+
     model, artifacts, context, bundle = build_solver_from_sources(
         args.config,
         args.data_dir,
+        selected_departments=selected_departments or None,
     )
 
     solver = cp_model.CpSolver()
