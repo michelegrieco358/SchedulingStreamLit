@@ -152,3 +152,73 @@ def test_coverage_group_weight_is_strictly_greater_and_dominant() -> None:
     assert role_coeff > int(500.0 * 1000)
     assert group_coeff > role_coeff
 
+
+def test_coverage_dominance_uses_effective_objective_coefficients() -> None:
+    employees = pd.DataFrame({"employee_id": ["E1"], "role": ["INFERMIERE"]})
+    slots = pd.DataFrame(
+        {
+            "slot_id": [1],
+            "shift_code": ["M"],
+            "coverage_code": ["COV"],
+            "reparto_id": ["REP1"],
+            "date": [date(2025, 1, 1)],
+        }
+    )
+    slot_requirements = pd.DataFrame(
+        {
+            "slot_id": [1],
+            "role": ["INFERMIERE"],
+            "demand": [1],
+        }
+    )
+    coverage_totals = pd.DataFrame(
+        {
+            "coverage_code": ["COV"],
+            "shift_code": ["M"],
+            "reparto_id": ["REP1"],
+            "total_staff": [1],
+            "ruoli_totale": ["INFERMIERE"],
+        }
+    )
+    calendar = pd.DataFrame({"data": [pd.Timestamp("2025-01-01")]})
+    empty = pd.DataFrame()
+
+    # Keep configured coverage weights tiny: coefficients must still dominate
+    # effective objective coefficients already present in build_model.
+    context = ModelContext(
+        cfg={
+            "weights": {
+                "due_hours_under": 10_000.0,
+                "coverage_under_role": 1.0,
+                "coverage_under_group": 2.0,
+            }
+        },
+        employees=employees,
+        slots=slots,
+        coverage_roles=empty,
+        coverage_totals=coverage_totals,
+        slot_requirements=slot_requirements,
+        availability=empty,
+        leaves=empty,
+        history=empty,
+        locks_must=empty,
+        locks_forbid=empty,
+        gap_pairs=empty,
+        calendars=calendar,
+        preassignments=empty,
+        bundle=_base_bundle(),
+    )
+
+    artifacts = build_model(context)
+    pre_max_coeff = max((int(term.coeff) for term in artifacts.objective_terms), default=0)
+    add_coverage_constraints(context, artifacts)
+
+    by_component = {}
+    for item in artifacts.objective_terms:
+        by_component.setdefault(item.component, []).append(item.coeff)
+
+    role_coeff = min(by_component["copertura_ruolo_scopertura"])
+    group_coeff = min(by_component["copertura_gruppo_scopertura"])
+
+    assert role_coeff > pre_max_coeff
+    assert group_coeff > role_coeff

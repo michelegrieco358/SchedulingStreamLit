@@ -3066,18 +3066,16 @@ def _build_preassignment_objective_terms(
     return terms, contributions
 
 
-def _resolve_coverage_under_weights(cfg: Mapping[str, Any] | None) -> tuple[float, float]:
-    """Resolve coverage-understaffing weights enforcing strict dominance.
+def _resolve_coverage_under_coefficients(
+    cfg: Mapping[str, Any] | None,
+    existing_terms: Iterable[ObjectiveTermContribution],
+) -> tuple[int, int]:
+    """Resolve objective coefficients for coverage understaffing penalties.
 
     Business rule required for the demo:
-    - coverage understaffing penalties must dominate every other penalty.
-    - group understaffing must dominate role understaffing.
+    - coverage-under coefficients must dominate all other objective coefficients;
+    - group-under coefficient must be strictly greater than role-under coefficient.
     """
-
-    if not isinstance(cfg, Mapping):
-        return 11.0, 12.0
-
-    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else {}
 
     def _as_non_negative_float(value: Any) -> float:
         try:
@@ -3088,23 +3086,31 @@ def _resolve_coverage_under_weights(cfg: Mapping[str, Any] | None) -> tuple[floa
             return 0.0
         return parsed
 
-    max_other = 0.0
-    for key, value in weights_cfg.items():
-        key_text = str(key).strip().lower()
-        if key_text in {"coverage_under_group", "coverage_under_role"}:
-            continue
-        max_other = max(max_other, _as_non_negative_float(value))
+    configured_role = 0.0
+    configured_group = 0.0
+    configured_other_max_coeff = 0
+    if isinstance(cfg, Mapping):
+        weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else {}
+        configured_role = _as_non_negative_float(weights_cfg.get("coverage_under_role"))
+        configured_group = _as_non_negative_float(weights_cfg.get("coverage_under_group"))
+        for key, raw_value in weights_cfg.items():
+            key_text = str(key).strip().lower()
+            if key_text in {"coverage_under_role", "coverage_under_group"}:
+                continue
+            coeff = int(round(_as_non_negative_float(raw_value) * COVERAGE_OBJECTIVE_SCALE))
+            configured_other_max_coeff = max(configured_other_max_coeff, coeff)
 
-    min_role = max_other + 1.0
-    min_group = max_other + 2.0
+    configured_role_coeff = int(round(configured_role * COVERAGE_OBJECTIVE_SCALE))
+    configured_group_coeff = int(round(configured_group * COVERAGE_OBJECTIVE_SCALE))
 
-    role_configured = _as_non_negative_float(weights_cfg.get("coverage_under_role"))
-    role_weight = max(role_configured, min_role)
+    max_other_coeff = 0
+    for term in existing_terms:
+        max_other_coeff = max(max_other_coeff, int(term.coeff))
+    max_other_coeff = max(max_other_coeff, configured_other_max_coeff)
 
-    group_configured = _as_non_negative_float(weights_cfg.get("coverage_under_group"))
-    group_weight = max(group_configured, role_weight + 1.0, min_group)
-
-    return role_weight, group_weight
+    role_coeff = max(1, configured_role_coeff, max_other_coeff + 1)
+    group_coeff = max(1, configured_group_coeff, max_other_coeff + 2, role_coeff + 1)
+    return role_coeff, group_coeff
 
 
 def _existing_objective_terms_from_metadata(
@@ -5029,14 +5035,12 @@ def add_coverage_constraints(context: ModelContext, artifacts: ModelArtifacts) -
 
     emp_role_map = _build_employee_role_map(context.employees, bundle)
 
-    role_weight, group_weight = _resolve_coverage_under_weights(
-        context.cfg if isinstance(context.cfg, Mapping) else None
-    )
-    role_coeff = max(1, int(round(role_weight * COVERAGE_OBJECTIVE_SCALE)))
-    group_coeff = max(1, int(round(group_weight * COVERAGE_OBJECTIVE_SCALE)))
-
     objective_terms = _existing_objective_terms_from_metadata(artifacts.objective_terms)
     objective_metadata = list(artifacts.objective_terms)
+    role_coeff, group_coeff = _resolve_coverage_under_coefficients(
+        context.cfg if isinstance(context.cfg, Mapping) else None,
+        objective_metadata,
+    )
 
     coverage_under_role: Dict[tuple[int, str], cp_model.IntVar] = {}
     coverage_under_group: Dict[int, cp_model.IntVar] = {}
