@@ -3,7 +3,7 @@ from __future__ import annotations
 """Utility di alto livello per caricare i dati, costruire il modello CP-SAT
  e applicare i vincoli principali."""
 
-from typing import Mapping, Tuple
+from typing import Iterable, Mapping, Tuple
 
 from ortools.sat.python import cp_model
 
@@ -18,10 +18,16 @@ class SolverBuildError(Exception):
 def build_solver_from_sources(
     cfg_path: str,
     data_dir: str,
+    *,
+    selected_departments: Iterable[str] | None = None,
 ) -> Tuple[cp_model.CpModel, ModelArtifacts, ModelContext, Mapping[str, object]]:
     """Carica i dati, costruisce il bundle e restituisce (model, artifacts, context, bundle)."""
     try:
-        context, data, bundle = load_context(cfg_path, data_dir)
+        context, data, bundle = load_context(
+            cfg_path,
+            data_dir,
+            selected_departments=selected_departments,
+        )
     except Exception as exc:  # pragma: no cover - superficie ridotta
         raise SolverBuildError(str(exc)) from exc
 

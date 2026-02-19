@@ -35,6 +35,7 @@ with st.sidebar:
     st.header("Input")
     cfg_file = st.file_uploader("Config YAML", type=["yml","yaml"])
     data_zip = st.file_uploader("Dati (ZIP di CSV)", type=["zip"])
+    selected_departments_raw = st.text_input("Reparti da includere (CSV, opzionale)", "", help="Esempio: degenza,pronto_soccorso")
     if mode == "In‑process":
         st.header("Parametri solver")
         time_limit = st.number_input("Time limit (sec)", 0.0, 9999.0, 60.0, 5.0)
@@ -132,9 +133,13 @@ def _build_assignments_df(solver, artifacts, bundle):
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df.sort_values(by=[c for c in ["date","reparto_id","shift_code","employee_id"] if c in df.columns]).reset_index(drop=True)
 
-def _solve_inprocess(cfg_path, data_dir, time_limit_s, gap_rel, log_flag):
+def _solve_inprocess(cfg_path, data_dir, time_limit_s, gap_rel, log_flag, selected_departments=None):
     from src.solver import build_solver_from_sources
-    model, artifacts, context, bundle = build_solver_from_sources(str(cfg_path), str(data_dir))
+    model, artifacts, context, bundle = build_solver_from_sources(
+        str(cfg_path),
+        str(data_dir),
+        selected_departments=selected_departments,
+    )
     solver = cp_model.CpSolver()
     if time_limit_s > 0: solver.parameters.max_time_in_seconds = float(time_limit_s)
     if gap_rel > 0: solver.parameters.relative_gap_limit = float(gap_rel)
@@ -174,7 +179,15 @@ if run_btn:
         result_box = {}
         def _worker():
             try:
-                solver, status, artifacts, bundle = _solve_inprocess(cfg_path, data_dir, time_limit, gap, log_search)
+                selected_departments = [p.strip() for p in selected_departments_raw.split(",") if p.strip()]
+                solver, status, artifacts, bundle = _solve_inprocess(
+                    cfg_path,
+                    data_dir,
+                    time_limit,
+                    gap,
+                    log_search,
+                    selected_departments=selected_departments or None,
+                )
                 result_box.update(dict(solver=solver, status=status, artifacts=artifacts, bundle=bundle))
             except Exception as e:
                 log_queue.put(f"Errore: {e}")
@@ -212,6 +225,9 @@ if run_btn:
         buffer = deque(maxlen=20)
         _render_log(["(log CLI in tempo reale)"])
         tokens = extra_args.strip().split() if extra_args.strip() else []
+        selected_departments = [p.strip() for p in selected_departments_raw.split(",") if p.strip()]
+        if selected_departments:
+            tokens.extend(["--departments", ",".join(selected_departments)])
         cmd = _run_cli(cfg_path, data_dir, tokens)
         st.caption("Comando: `" + " ".join(cmd) + "`")
         try:

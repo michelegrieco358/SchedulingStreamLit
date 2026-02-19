@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+import pandas as pd
+
+from src.load_data import _filter_loaded_data_for_departments
+
+
+def test_filter_loaded_data_for_departments_filters_employees_slots_and_pools() -> None:
+    data = {
+        "employees": pd.DataFrame(
+            {
+                "employee_id": ["E_A", "E_B"],
+                "reparto_id": ["A", "B"],
+                "role": ["INF", "INF"],
+                "pool_id": ["P1", "P1"],
+            }
+        ),
+        "month_plan": pd.DataFrame(
+            {
+                "reparto_id": ["A", "B"],
+                "data": ["2025-11-01", "2025-11-01"],
+                "shift_code": ["M", "M"],
+            }
+        ),
+        "shift_slots": pd.DataFrame(
+            {
+                "slot_id": [1, 2],
+                "reparto_id": ["A", "B"],
+                "shift_code": ["M", "M"],
+            }
+        ),
+        "slot_requirements": pd.DataFrame(
+            {
+                "slot_id": [1, 2],
+                "role": ["INF", "INF"],
+                "required_count": [1, 1],
+            }
+        ),
+        "role_dept_pools": pd.DataFrame(
+            {
+                "role": ["INF", "INF"],
+                "pool_id": ["P1", "P1"],
+                "reparto_id": ["A", "B"],
+            }
+        ),
+        "availability": pd.DataFrame(
+            {
+                "employee_id": ["E_A", "E_B"],
+                "data": ["2025-11-01", "2025-11-01"],
+                "turno": ["M", "M"],
+            }
+        ),
+    }
+
+    data["employees_df"] = data["employees"]
+    data["month_plan_df"] = data["month_plan"]
+    data["shift_slots_df"] = data["shift_slots"]
+    data["slot_requirements_df"] = data["slot_requirements"]
+    data["role_dept_pools_df"] = data["role_dept_pools"]
+    data["availability_df"] = data["availability"]
+
+    filtered = _filter_loaded_data_for_departments(data, ["A"])
+
+    assert filtered["employees"]["employee_id"].tolist() == ["E_A"]
+    assert filtered["shift_slots"]["slot_id"].tolist() == [1]
+    assert filtered["slot_requirements"]["slot_id"].tolist() == [1]
+    assert filtered["month_plan"]["reparto_id"].tolist() == ["A"]
+    assert filtered["role_dept_pools"]["reparto_id"].tolist() == ["A"]
+    assert filtered["availability"]["employee_id"].tolist() == ["E_A"]
