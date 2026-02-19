@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from calendar import monthrange
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 import math
 from typing import Any, Dict, Iterable, List, Mapping
@@ -19,6 +19,7 @@ NIGHT_FAIRNESS_WEIGHT_SCALE = 100
 WEEKEND_FAIRNESS_OBJECTIVE_SCALE = 10
 WEEKEND_FAIRNESS_WEIGHT_SCALE = 100
 PREASSIGNMENT_OBJECTIVE_SCALE = 1000
+COVERAGE_OBJECTIVE_SCALE = 1000
 
 import pandas as pd
 
@@ -114,6 +115,8 @@ class ModelArtifacts:
     weekly_rest_violations: Dict[tuple[int, int], cp_model.BoolVar]
     weekly_rest_penalty_weight: float
     objective_terms: tuple[ObjectiveTermContribution, ...] = tuple()
+    coverage_under_role: Dict[tuple[int, str], cp_model.IntVar] = field(default_factory=dict)
+    coverage_under_group: Dict[int, cp_model.IntVar] = field(default_factory=dict)
 
 
 def build_model(context: ModelContext) -> ModelArtifacts:
@@ -3063,6 +3066,59 @@ def _build_preassignment_objective_terms(
     return terms, contributions
 
 
+def _resolve_coverage_under_weights(cfg: Mapping[str, Any] | None) -> tuple[float, float]:
+    """Resolve coverage-understaffing weights enforcing strict dominance.
+
+    Business rule required for the demo:
+    - coverage understaffing penalties must dominate every other penalty.
+    - group understaffing must dominate role understaffing.
+    """
+
+    if not isinstance(cfg, Mapping):
+        return 11.0, 12.0
+
+    weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else {}
+
+    def _as_non_negative_float(value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(parsed) or parsed < 0:
+            return 0.0
+        return parsed
+
+    max_other = 0.0
+    for key, value in weights_cfg.items():
+        key_text = str(key).strip().lower()
+        if key_text in {"coverage_under_group", "coverage_under_role"}:
+            continue
+        max_other = max(max_other, _as_non_negative_float(value))
+
+    min_role = max_other + 1.0
+    min_group = max_other + 2.0
+
+    role_configured = _as_non_negative_float(weights_cfg.get("coverage_under_role"))
+    role_weight = max(role_configured, min_role)
+
+    group_configured = _as_non_negative_float(weights_cfg.get("coverage_under_group"))
+    group_weight = max(group_configured, role_weight + 1.0, min_group)
+
+    return role_weight, group_weight
+
+
+def _existing_objective_terms_from_metadata(
+    metadata: Iterable[ObjectiveTermContribution],
+) -> List[cp_model.LinearExpr]:
+    terms: List[cp_model.LinearExpr] = []
+    for record in metadata:
+        if record.is_complement:
+            terms.append((1 - record.var) * int(record.coeff))
+        else:
+            terms.append(record.var * int(record.coeff))
+    return terms
+
+
 def _build_slot_reparto_index(
     context: ModelContext, bundle: Mapping[str, object]
 ) -> dict[int, str]:
@@ -4973,7 +5029,19 @@ def add_coverage_constraints(context: ModelContext, artifacts: ModelArtifacts) -
 
     emp_role_map = _build_employee_role_map(context.employees, bundle)
 
-    # Copertura per ruolo
+    role_weight, group_weight = _resolve_coverage_under_weights(
+        context.cfg if isinstance(context.cfg, Mapping) else None
+    )
+    role_coeff = max(1, int(round(role_weight * COVERAGE_OBJECTIVE_SCALE)))
+    group_coeff = max(1, int(round(group_weight * COVERAGE_OBJECTIVE_SCALE)))
+
+    objective_terms = _existing_objective_terms_from_metadata(artifacts.objective_terms)
+    objective_metadata = list(artifacts.objective_terms)
+
+    coverage_under_role: Dict[tuple[int, str], cp_model.IntVar] = {}
+    coverage_under_group: Dict[int, cp_model.IntVar] = {}
+
+    # Copertura per ruolo (soft)
     for slot_idx, role_u, demand in _iter_role_requirements(context, sid_of):
         candidates = [
             emp_idx
@@ -4981,9 +5049,19 @@ def add_coverage_constraints(context: ModelContext, artifacts: ModelArtifacts) -
             if emp_role_map.get(emp_idx) == role_u
         ]
         expr = sum(x[(emp_idx, slot_idx)] for emp_idx in candidates)
-        model.Add(expr >= demand)
+        under = model.NewIntVar(0, int(demand), f"under_cov_role_s{slot_idx}_{role_u}")
+        model.Add(expr + under >= int(demand))
+        coverage_under_role[(int(slot_idx), str(role_u))] = under
+        objective_terms.append(under * role_coeff)
+        objective_metadata.append(
+            ObjectiveTermContribution(
+                component="copertura_ruolo_scopertura",
+                var=under,
+                coeff=role_coeff,
+            )
+        )
 
-    # Copertura per gruppi
+    # Copertura per gruppi (soft)
     for slot_idx, role_set, need, cap in _iter_group_requirements(context, sid_of):
         candidates = [
             emp_idx
@@ -4991,9 +5069,26 @@ def add_coverage_constraints(context: ModelContext, artifacts: ModelArtifacts) -
             if emp_role_map.get(emp_idx) in role_set
         ]
         expr = sum(x[(emp_idx, slot_idx)] for emp_idx in candidates)
-        model.Add(expr >= need)
+        under = model.NewIntVar(0, int(need), f"under_cov_group_s{slot_idx}")
+        model.Add(expr + under >= int(need))
+        coverage_under_group[int(slot_idx)] = under
+        objective_terms.append(under * group_coeff)
+        objective_metadata.append(
+            ObjectiveTermContribution(
+                component="copertura_gruppo_scopertura",
+                var=under,
+                coeff=group_coeff,
+            )
+        )
         if cap is not None:
             model.Add(expr <= cap)
+
+    artifacts.coverage_under_role = coverage_under_role
+    artifacts.coverage_under_group = coverage_under_group
+    artifacts.objective_terms = tuple(objective_metadata)
+
+    if objective_terms:
+        model.Minimize(sum(objective_terms))
 
 
 def _fetch(store: Any, *candidates: str) -> Any:
