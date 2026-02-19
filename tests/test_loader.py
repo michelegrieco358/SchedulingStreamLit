@@ -31,6 +31,7 @@ from loader.employees import (
     resolve_fulltime_baseline,
 )
 from loader.leaves import apply_unplanned_leave_durations, load_leaves
+from loader.history import load_history
 from loader.preassignments import load_preassignments
 from loader.shifts import (
     build_shift_slots,
@@ -1533,6 +1534,34 @@ def test_load_preassignments_ignores_out_of_horizon(tmp_path: Path) -> None:
 
     assert list(loaded["data"]) == ["2025-11-15"]
     assert list(loaded["state_code"]) == ["P"]
+
+
+def test_load_history_keeps_only_days_before_horizon(tmp_path: Path) -> None:
+    calendar = build_calendar(date(2025, 11, 15), date(2025, 11, 16))
+    employees = pd.DataFrame({"employee_id": ["E1"]})
+    shifts = pd.DataFrame(
+        {
+            "shift_id": ["M", "N"],
+            "start_time": [pd.to_timedelta(8, unit="h"), pd.to_timedelta(22, unit="h")],
+            "end_time": [pd.to_timedelta(16, unit="h"), pd.to_timedelta(6, unit="h")],
+            "duration_min": [480, 480],
+            "crosses_midnight": [0, 1],
+        }
+    )
+    history_df = pd.DataFrame(
+        {
+            "employee_id": ["E1", "E1", "E1"],
+            "data": ["2025-11-14", "2025-11-15", "2025-11-16"],
+            "turno": ["M", "N", "M"],
+        }
+    )
+    path = tmp_path / "history.csv"
+    history_df.to_csv(path, index=False)
+
+    loaded = load_history(str(path), employees, shifts, calendar)
+
+    assert list(loaded["data"]) == ["2025-11-14"]
+    assert loaded["is_in_horizon"].fillna(False).astype(bool).sum() == 0
 
 
 def test_get_absence_hours_from_config_and_load_all_smoke(tmp_path: Path) -> None:
