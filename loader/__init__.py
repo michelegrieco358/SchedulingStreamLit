@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import calendar as pycalendar
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,6 +110,7 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
     weeks_in_horizon = (
         calendar_df.loc[calendar_df["is_in_horizon"], "week_id"].nunique()
     )
+    days_in_reference_month = pycalendar.monthrange(start_date.year, start_date.month)[1]
     if weeks_in_horizon <= 0:
         raise LoaderError(
             "calendar: nessuna settimana trovata nell'orizzonte configurato"
@@ -123,7 +125,7 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
         defaults,
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
     employees_df = enrich_employees_with_fte(employees_df, cfg)
     employees_df = enrich_employees_with_cross_policy(employees_df, cfg)

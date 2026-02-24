@@ -5,6 +5,7 @@ import re
 import shutil
 import warnings
 from datetime import date, datetime
+import calendar
 from pathlib import Path
 import sys
 
@@ -41,7 +42,7 @@ from loader.shifts import (
 from loader.utils import LoaderError
 
 
-def _calendar_info(cfg: dict[str, object]) -> tuple[int, int]:
+def _calendar_info(cfg: dict[str, object]) -> tuple[int, int, int]:
     start = datetime.strptime(str(cfg["horizon"]["start_date"]), "%Y-%m-%d").date()
     end = datetime.strptime(str(cfg["horizon"]["end_date"]), "%Y-%m-%d").date()
     calendar_df = build_calendar(start, end)
@@ -49,7 +50,8 @@ def _calendar_info(cfg: dict[str, object]) -> tuple[int, int]:
     weeks_in_horizon = calendar_df.loc[
         calendar_df["is_in_horizon"], "week_id"
     ].nunique()
-    return horizon_days, weeks_in_horizon
+    days_in_reference_month = calendar.monthrange(start.year, start.month)[1]
+    return horizon_days, weeks_in_horizon, days_in_reference_month
 
 
 def _write_basic_config(
@@ -99,7 +101,7 @@ def _load_basic_employees(
 ) -> pd.DataFrame:
     cfg_path = _write_basic_config(tmp_path, defaults_extra)
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     rows = employees_rows or [
         {
@@ -121,7 +123,7 @@ def _load_basic_employees(
         cfg.get("defaults", {}),
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
 
 
@@ -348,14 +350,14 @@ def test_build_shift_slots_applies_break_minutes_to_duration() -> None:
 
 def test_load_employees_and_cross_policy_defaults() -> None:
     cfg = load_config(str(DATA_DIR / "config.yaml"))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_df = load_employees(
         str(DATA_CSV_DIR / 'employees.csv'),
         cfg.get("defaults", {}),
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
 
     enriched = enrich_employees_with_cross_policy(employees_df, cfg)
@@ -399,6 +401,49 @@ def test_load_employees_applies_default_hour_caps(tmp_path: Path) -> None:
 
 
 
+
+
+
+def test_load_employees_weekly_cap_uses_reference_month_days_on_partial_horizon(tmp_path: Path) -> None:
+    cfg_path = _write_basic_config(
+        tmp_path,
+        defaults_extra={"contract_hours_by_role_h": {"infermiere": 155}},
+    )
+    cfg_dict = yaml.safe_load(cfg_path.read_text())
+    cfg_dict["horizon"] = {"start_date": "2025-01-10", "end_date": "2025-01-20"}
+    cfg_path.write_text(yaml.safe_dump(cfg_dict, sort_keys=False))
+
+    cfg = load_config(str(cfg_path))
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
+    assert horizon_days == 11
+    assert days_in_reference_month == 31
+
+    employees_path = _write_employees_csv(
+        tmp_path,
+        [
+            {
+                "employee_id": "E1",
+                "nome": "Anna",
+                "role": "infermiere",
+                "reparto_id": "dep",
+                "ore_dovute_mese_h": 155,
+                "saldo_prog_iniziale_h": 0,
+            }
+        ],
+    )
+
+    employees_df = load_employees(
+        str(employees_path),
+        cfg.get("defaults", {}),
+        cfg.get("roles", {}) or {},
+        weeks_in_horizon,
+        days_in_reference_month,
+    )
+
+    row = employees_df.iloc[0]
+    weekly_theoretical = 155 / 31 * 7
+    expected_week_cap_min = int(round(weekly_theoretical * 1.4 * 60))
+    assert row["max_week_min"] == expected_week_cap_min
 
 def test_enrich_employees_with_cross_policy_uses_safe_defaults_when_cross_missing(tmp_path: Path) -> None:
     cfg_path = _write_basic_config(
@@ -553,7 +598,7 @@ def test_load_employees_rest11h_defaults_and_overrides(tmp_path: Path) -> None:
         },
     )
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -594,7 +639,7 @@ def test_load_employees_rest11h_defaults_and_overrides(tmp_path: Path) -> None:
         cfg.get("defaults", {}),
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
 
     lookup = employees_df.set_index("employee_id")
@@ -715,7 +760,7 @@ def test_absence_full_day_hours_invalid_value(tmp_path: Path) -> None:
 def test_load_employees_rest11h_invalid_value(tmp_path: Path) -> None:
     cfg_path = _write_basic_config(tmp_path, {"rest11h": {"max_monthly_exceptions": 2}})
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -751,7 +796,7 @@ def test_load_employees_balance_delta_defaults_and_overrides(tmp_path: Path) -> 
         {"balance": {"max_balance_delta_month_h": 12}},
     )
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -790,7 +835,7 @@ def test_load_employees_balance_delta_defaults_and_overrides(tmp_path: Path) -> 
         cfg.get("defaults", {}),
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
 
     lookup = employees_df.set_index("employee_id")
@@ -805,7 +850,7 @@ def test_load_employees_balance_delta_invalid_employee_value(tmp_path: Path) -> 
         {"balance": {"max_balance_delta_month_h": 5}},
     )
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -841,7 +886,7 @@ def test_load_employees_balance_delta_invalid_default(tmp_path: Path) -> None:
         {"balance": {"max_balance_delta_month_h": -3}},
     )
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -1158,13 +1203,13 @@ def test_load_all_applies_unplanned_absence_hours(tmp_path: Path) -> None:
     assert (~shift_rows["is_planned"].astype(bool)).all()
 def test_enrich_employees_with_fte_uses_defaults() -> None:
     cfg = load_config(str(DATA_DIR / "config.yaml"))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
     employees_df = load_employees(
         str(DATA_CSV_DIR / 'employees.csv'),
         cfg.get("defaults", {}),
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
 
     fte_df = enrich_employees_with_fte(employees_df, cfg)
@@ -1178,7 +1223,7 @@ def test_enrich_employees_with_fte_uses_defaults() -> None:
 def test_load_employees_weekly_rest_uses_default(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     cfg_path = _write_basic_config(tmp_path)
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -1213,7 +1258,7 @@ def test_load_employees_weekly_rest_uses_default(tmp_path: Path, caplog: pytest.
 def test_load_employees_weekly_rest_override(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     cfg_path = _write_basic_config(tmp_path, defaults_extra={"weekly_rest_min_days": 2})
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -1249,7 +1294,7 @@ def test_load_employees_weekly_rest_override(tmp_path: Path, caplog: pytest.LogC
 def test_load_employees_weekly_rest_invalid_values(invalid_value: str, tmp_path: Path) -> None:
     cfg_path = _write_basic_config(tmp_path)
     cfg = load_config(str(cfg_path))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
 
     employees_path = _write_employees_csv(
         tmp_path,
@@ -1410,13 +1455,13 @@ def test_load_config_weights_override_legacy_fields(tmp_path: Path) -> None:
 
 def test_shift_role_eligibility_with_allowed_column() -> None:
     cfg = load_config(str(DATA_DIR / "config.yaml"))
-    horizon_days, weeks_in_horizon = _calendar_info(cfg)
+    horizon_days, weeks_in_horizon, days_in_reference_month = _calendar_info(cfg)
     employees_df = load_employees(
         str(DATA_CSV_DIR / 'employees.csv'),
         cfg.get("defaults", {}),
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
     shifts_df = load_shifts(str(DATA_CSV_DIR / 'shifts.csv'))
     eligibility_df = load_shift_role_eligibility(

@@ -65,7 +65,7 @@ def load_employees(
     defaults: dict[str, Any],
     role_defaults: dict[str, Any],
     weeks_in_horizon: int,
-    days_in_horizon: int,
+    days_in_reference_month: int,
 ) -> pd.DataFrame:
     """Carica e valida dati dipendenti con ore, limiti e contatori."""
     df = pd.read_csv(path, dtype=str).fillna("")
@@ -252,9 +252,9 @@ def load_employees(
         raise LoaderError(
             "employees.csv: impossibile calcolare i limiti settimanali senza settimane nell'orizzonte"
         )
-    if days_in_horizon <= 0:
+    if days_in_reference_month <= 0:
         raise LoaderError(
-            "employees.csv: impossibile calcolare i limiti settimanali senza giorni nell'orizzonte"
+            "employees.csv: impossibile calcolare i limiti settimanali senza giorni nel mese di riferimento"
         )
 
     contract_hours = df["dovuto_min"].astype(float) / 60.0
@@ -341,12 +341,12 @@ def load_employees(
     week_col_present = "max_week_hours_h" in df.columns
     for idx, base_hours in enumerate(contract_hours):
         # Ripartiamo le ore contrattuali su una settimana "media" del mese
-        # (ore_mese / giorni_orizzonte * 7). Il valore viene poi moltiplicato
+        # (ore_mese / giorni_mese_riferimento * 7). Il valore viene poi moltiplicato
         # per 1.4 (+40%) così da consentire straordinari senza concentrare tutto in
         # un'unica settimana, applicando lo stesso cap anche alle settimane
         # parziali all'inizio o alla fine dell'orizzonte.
         weekly_theoretical = (
-            base_hours / days_in_horizon * 7.0 if days_in_horizon else 0.0
+            base_hours / days_in_reference_month * 7.0 if days_in_reference_month else 0.0
         )
         override = ""
         if week_col_present:
