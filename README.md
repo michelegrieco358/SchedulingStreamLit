@@ -76,7 +76,7 @@ grandezze da usare nei vincoli del solver:
 * **`max_week_min`** – il limite settimanale inderogabile. Se il CSV non fornisce
   un override (`max_week_hours_h`), il loader parte dalle ore contrattuali
   mensili e le ripartisce su una settimana "media" del mese usando la formula
-  `ore_mese / giorni_orizzonte × 7`. Il cap finale è `1.5 × quota settimanale` e
+  `ore_mese / giorni_mese(start_date) × 7`. Il cap finale è `1.4 × quota settimanale` e
   viene applicato anche alle settimane parziali (iniziali/finali), così da
   impedire concentrazioni eccessive di straordinario in una singola settimana
   senza imporre limiti artificiali sui singoli giorni.

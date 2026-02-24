@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import calendar
 import csv
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -143,7 +144,7 @@ def _check_employees(
     defaults: dict,
     role_defaults: dict,
     weeks_in_horizon: int,
-    horizon_days: int,
+    days_in_reference_month: int,
 ) -> tuple[list[dict[str, str]], DatasetSummary]:
     rows, columns = _read_csv_dicts(path)
     base_required = {
@@ -270,14 +271,14 @@ def _check_employees(
         if week_cap:
             if weeks_in_horizon <= 0:
                 raise ValidationError("config: orizzonte senza settimane per validare max_week_hours_h")
-            if horizon_days <= 0:
-                raise ValidationError("config: orizzonte senza giorni per validare max_week_hours_h")
+            if days_in_reference_month <= 0:
+                raise ValidationError("config: mese di riferimento senza giorni per validare max_week_hours_h")
             week_hours = _parse_float(week_cap, f"{path.name}: max_week_hours_h")
             # Stessa formula del loader: distribuzione delle ore contrattuali su
-            # una settimana "media" del mese (ore_mese / giorni_orizzonte * 7)
+            # una settimana "media" del mese (ore_mese / giorni_mese_riferimento * 7)
             # così da applicare un cap uniforme anche alle settimane parziali.
             weekly_theoretical = (
-                contract_hours / horizon_days * 7.0 if horizon_days else 0.0
+                contract_hours / days_in_reference_month * 7.0 if days_in_reference_month else 0.0
             )
             if week_hours + 1e-9 < weekly_theoretical:
                 raise ValidationError(
@@ -963,12 +964,14 @@ def run_checks(config_path: Path, data_dir: Path) -> ValidationResult:
             "config: orizzonte senza giorni validi (start_date > end_date?)"
         )
 
+    days_in_reference_month = calendar.monthrange(horizon_start.year, horizon_start.month)[1]
+
     employees, emp_summary = _check_employees(
         data_dir / "employees.csv",
         defaults,
         cfg.get("roles", {}) or {},
         weeks_in_horizon,
-        horizon_days,
+        days_in_reference_month,
     )
     shifts, shift_summary = _check_shifts(data_dir / "shifts.csv")
     shift_role_rows, shift_role_summary = _check_shift_role(
