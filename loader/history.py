@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from typing import Iterable
 
@@ -146,13 +147,15 @@ def load_history(
             ]
         )
 
+    _HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
     has_inline_timing = {"start", "end", "duration_min"}.issubset(df.columns)
     if has_inline_timing:
         def _to_timedelta_or_nat(s: str) -> pd.Timedelta | pd.NaTType:
             value = str(s).strip()
             if value == "":
                 return pd.NaT
-            if not pd.Series([value]).str.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$").iloc[0]:
+            if not _HHMM_RE.fullmatch(value):
                 raise LoaderError(
                     f"history.csv: orario non valido (atteso HH:MM): {value!r}"
                 )

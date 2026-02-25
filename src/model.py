@@ -180,9 +180,20 @@ def build_model(context: ModelContext) -> ModelArtifacts:
 
     absence_state = _resolve_absence_state_code(context.cfg, state_codes)
     absence_pairs: set[tuple[int, int]] = set()
+
+    horizon_cfg = context.cfg.get("horizon") if isinstance(context.cfg, Mapping) else None
+    horizon_start_date = (
+        _parse_date_value(horizon_cfg.get("start_date"))
+        if isinstance(horizon_cfg, Mapping)
+        else None
+    )
+    horizon_start_idx = did_of.get(horizon_start_date) if horizon_start_date is not None else None
+
     if absence_state is not None:
         absence_pairs = _collect_absence_pairs(context.leaves, eid_of, did_of)
         for emp_idx, day_idx in absence_pairs:
+            if horizon_start_idx is not None and day_idx < horizon_start_idx:
+                continue  # storico ha la precedenza sui giorni pre-orizzonte
             var = state_vars.get((emp_idx, day_idx, absence_state))
             if var is not None:
                 model.Add(var == 1)
@@ -224,6 +235,9 @@ def build_model(context: ModelContext) -> ModelArtifacts:
     shift_states = {state for state in ("M", "P", "N", "G") if state in state_codes}
     for emp_idx in range(num_employees):
         for day_idx in range(num_days):
+            if horizon_start_idx is not None and day_idx < horizon_start_idx:
+                continue  # stati pre-orizzonte già fissati da _fix_pre_horizon_states
+
             day_assignments = [
                 assign_vars[(emp_idx, slot_idx)]
                 for slot_idx in slots_by_day.get(day_idx, [])

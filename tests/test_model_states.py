@@ -498,3 +498,38 @@ def test_pre_horizon_state_defaults_to_rest_when_missing_in_history() -> None:
     solver = _solve_model(artifacts)
 
     assert solver.Value(artifacts.state_vars[(0, 0, "R")]) == 1
+
+
+def test_pre_horizon_history_takes_precedence_over_leave() -> None:
+    """History says M on pre-horizon day, leaves says F — history wins, no INFEASIBLE."""
+    leaves = pd.DataFrame(
+        {"employee_id": ["E1"], "date": [pd.Timestamp("2025-01-01")]}
+    )
+    history = pd.DataFrame(
+        {
+            "employee_id": ["E1"],
+            "turno": ["M"],
+            "data": ["2025-01-01"],
+        }
+    )
+    context = _make_basic_context(
+        leaves,
+        history=history,
+        calendar_dates=[pd.Timestamp("2025-01-01"), pd.Timestamp("2025-01-02")],
+        slots=pd.DataFrame(
+            {
+                "slot_id": [1],
+                "shift_code": ["M"],
+                "date": [pd.Timestamp("2025-01-02")],
+            }
+        ),
+        cfg_extra={
+            "horizon": {"start_date": "2025-01-02", "end_date": "2025-01-02"},
+        },
+    )
+    artifacts = build_model(context)
+    solver = _solve_model(artifacts)
+
+    # History says M, so pre-horizon day should be M (not F from leaves)
+    assert solver.Value(artifacts.state_vars[(0, 0, "M")]) == 1
+    assert solver.Value(artifacts.state_vars[(0, 0, "F")]) == 0
