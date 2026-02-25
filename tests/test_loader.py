@@ -1345,6 +1345,27 @@ def test_load_config_warns_on_weekly_rest_hours(tmp_path: Path) -> None:
     assert defaults["weekly_rest_min_days"] == 1
 
 
+def test_load_config_preassignments_stability_default_true(tmp_path: Path) -> None:
+    cfg_path = _write_basic_config(tmp_path)
+
+    cfg = load_config(str(cfg_path))
+
+    assert cfg["preassignments"]["stability_enabled"] is True
+
+
+def test_load_config_rejects_non_boolean_stability_flag(tmp_path: Path) -> None:
+    cfg_path = _write_basic_config(tmp_path)
+    cfg_dict = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    cfg_dict["preassignments"] = {"stability_enabled": "yes"}
+    cfg_path.write_text(yaml.safe_dump(cfg_dict, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(
+        LoaderError,
+        match="preassignments\\.stability_enabled deve essere booleano",
+    ):
+        load_config(str(cfg_path))
+
+
 def test_load_config_builds_normalized_weights_from_legacy_fields(tmp_path: Path) -> None:
     cfg_path = _write_basic_config(
         tmp_path,

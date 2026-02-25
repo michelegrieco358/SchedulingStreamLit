@@ -5,7 +5,8 @@ horizon:
 rest_rules:
   min_between_shifts_h: 11
 
-preassignments: {}
+preassignments:
+  stability_enabled: true
 
 fairness:
   night_weight: 0.1

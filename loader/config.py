@@ -217,6 +217,26 @@ def load_config(path: str) -> dict[str, Any]:
         defaults.get("fairness"), "config: defaults.fairness"
     )
 
+    preassignments_cfg = cfg.get("preassignments")
+    if preassignments_cfg is None:
+        preassignments_cfg = {}
+    if not isinstance(preassignments_cfg, dict):
+        raise LoaderError("config: preassignments deve essere un dizionario")
+
+    stability_raw = preassignments_cfg.get("stability_enabled")
+    if stability_raw is None:
+        stability_enabled = True
+    elif isinstance(stability_raw, bool):
+        stability_enabled = stability_raw
+    else:
+        raise LoaderError(
+            "config: preassignments.stability_enabled deve essere booleano (true/false)"
+        )
+
+    normalized_preassignments = dict(preassignments_cfg)
+    normalized_preassignments["stability_enabled"] = bool(stability_enabled)
+    cfg["preassignments"] = normalized_preassignments
+
     def _coerce_non_negative_weight(raw: Any, label: str) -> float:
         if raw in (None, ""):
             return 0.0
@@ -235,7 +255,11 @@ def load_config(path: str) -> dict[str, Any]:
         raise LoaderError("config: weights deve essere un dizionario")
 
     rest_rules_cfg = cfg.get("rest_rules") if isinstance(cfg.get("rest_rules"), dict) else {}
-    preassign_cfg = cfg.get("preassignments") if isinstance(cfg.get("preassignments"), dict) else {}
+    preassign_cfg = (
+        cfg.get("preassignments")
+        if isinstance(cfg.get("preassignments"), dict)
+        else {}
+    )
     global_fairness_cfg = cfg.get("fairness") if isinstance(cfg.get("fairness"), dict) else {}
     balance_cfg = defaults.get("balance") if isinstance(defaults.get("balance"), dict) else {}
     night_cfg = defaults.get("night") if isinstance(defaults.get("night"), dict) else {}

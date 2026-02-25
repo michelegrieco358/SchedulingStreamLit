@@ -20,6 +20,7 @@ def build_solver_from_sources(
     data_dir: str,
     *,
     selected_departments: Iterable[str] | None = None,
+    stability_enabled: bool | None = None,
 ) -> Tuple[cp_model.CpModel, ModelArtifacts, ModelContext, Mapping[str, object]]:
     """Carica i dati, costruisce il bundle e restituisce (model, artifacts, context, bundle)."""
     try:
@@ -31,7 +32,7 @@ def build_solver_from_sources(
     except Exception as exc:  # pragma: no cover - superficie ridotta
         raise SolverBuildError(str(exc)) from exc
 
-    artifacts = build_model(context)
+    artifacts = build_model(context, stability_enabled=stability_enabled)
     add_coverage_constraints(context, artifacts)
 
     return artifacts.model, artifacts, context, bundle
@@ -41,4 +42,3 @@ __all__ = [
     "SolverBuildError",
     "build_solver_from_sources",
 ]
-

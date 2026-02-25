@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 import math
+import warnings
 from typing import Any, Dict, Iterable, List, Mapping
 
 DUE_HOUR_OBJECTIVE_SCALE = 1000
@@ -119,7 +120,11 @@ class ModelArtifacts:
     coverage_under_group: Dict[int, cp_model.IntVar] = field(default_factory=dict)
 
 
-def build_model(context: ModelContext) -> ModelArtifacts:
+def build_model(
+    context: ModelContext,
+    *,
+    stability_enabled: bool | None = None,
+) -> ModelArtifacts:
     """Istanzia il modello CP-SAT e crea le variabili base di assegnazione."""
     import_error = getattr(cp_model, "_IMPORT_ERROR", None)
     if import_error is not None:  # pragma: no cover - guard for environments without ortools
@@ -129,6 +134,10 @@ def build_model(context: ModelContext) -> ModelArtifacts:
         ) from import_error
 
     model = cp_model.CpModel()
+    stability_enabled_effective, stability_is_explicit = _resolve_stability_enabled(
+        context.cfg if isinstance(context.cfg, Mapping) else None,
+        runtime_override=stability_enabled,
+    )
 
     bundle = context.bundle
     eid_of: Mapping[str, int] = bundle["eid_of"]
@@ -408,11 +417,23 @@ def build_model(context: ModelContext) -> ModelArtifacts:
     objective_terms.extend(terms)
     objective_metadata.extend(details)
 
-    terms, details = _build_preassignment_objective_terms(
-        context, bundle, state_vars
-    )
-    objective_terms.extend(terms)
-    objective_metadata.extend(details)
+    if stability_enabled_effective:
+        preassignment_pairs = bundle.get("preassignment_pairs", [])
+        if (
+            stability_is_explicit
+            and (not isinstance(preassignment_pairs, list) or not preassignment_pairs)
+        ):
+            warnings.warn(
+                "Stabilita' attiva ma nessuna preassegnazione disponibile: "
+                "penalita' stabilita inattiva per questa esecuzione.",
+                UserWarning,
+                stacklevel=2,
+            )
+        terms, details = _build_preassignment_objective_terms(
+            context, bundle, state_vars
+        )
+        objective_terms.extend(terms)
+        objective_metadata.extend(details)
 
     if objective_terms:
         model.Minimize(sum(objective_terms))
@@ -3894,6 +3915,32 @@ def _resolve_preassignment_penalty_weight(cfg: Mapping[str, Any] | None) -> floa
         return max(value, 0.0)
 
     return 0.0
+
+
+def _resolve_stability_enabled(
+    cfg: Mapping[str, Any] | None,
+    *,
+    runtime_override: bool | None = None,
+) -> tuple[bool, bool]:
+    """Resolve stability switch with precedence runtime > config > legacy."""
+    if runtime_override is not None:
+        return bool(runtime_override), True
+
+    if not isinstance(cfg, Mapping):
+        return True, False
+
+    preassignments_cfg = cfg.get("preassignments")
+    if not isinstance(preassignments_cfg, Mapping):
+        return True, False
+
+    raw_value = preassignments_cfg.get("stability_enabled")
+    if raw_value is None:
+        return True, False
+    if isinstance(raw_value, bool):
+        return raw_value, True
+
+    # Defensive fallback for non-normalized runtime payloads.
+    return True, False
 
 
 def _add_night_pattern_constraints(

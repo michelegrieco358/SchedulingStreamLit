@@ -9,6 +9,10 @@ from typing import Optional
 
 from ortools.sat.python import cp_model
 
+from src.diagnostics import (
+    build_infeasibility_summary,
+    write_infeasibility_summary_report,
+)
 from src.objective_report import (
     compute_objective_breakdown,
     write_objective_breakdown_report,
@@ -95,6 +99,15 @@ def main() -> None:
         action="store_true",
         help="Se attivo, fallisce quando il warm start contiene record invalidi.",
     )
+    parser.add_argument(
+        "--stability",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help=(
+            "Controllo stabilita' preassegnazioni: "
+            "'auto' usa config, 'on' forza attivo, 'off' forza disattivo."
+        ),
+    )
     args = parser.parse_args()
 
     # Ignora l'avviso informativo sui locks mancanti, utile in ambiente POC.
@@ -113,10 +126,19 @@ def main() -> None:
         part.strip() for part in str(args.departments).split(",") if part.strip()
     ]
 
+    stability_override: bool | None
+    if args.stability == "on":
+        stability_override = True
+    elif args.stability == "off":
+        stability_override = False
+    else:
+        stability_override = None
+
     model, artifacts, context, bundle = build_solver_from_sources(
         args.config,
         args.data_dir,
         selected_departments=selected_departments or None,
+        stability_enabled=stability_override,
     )
 
     solver = cp_model.CpSolver()
@@ -157,6 +179,21 @@ def main() -> None:
         status = solver.Solve(model, callback)
 
     print("Solver status:", solver.StatusName(status))
+    if status == cp_model.INFEASIBLE:
+        summary = build_infeasibility_summary(context)
+        print("Diagnosi infeasibilita':")
+        for idx, cause in enumerate(summary.get("top_causes", []), start=1):
+            title = str(cause.get("title", "")).strip()
+            evidence = str(cause.get("evidence", "")).strip()
+            hint = str(cause.get("hint", "")).strip()
+            print(f"  {idx}. {title}")
+            if evidence:
+                print(f"     Evidenza: {evidence}")
+            if hint:
+                print(f"     Suggerimento: {hint}")
+        diagnostics_path = Path("infeasibility_diagnostics.txt")
+        write_infeasibility_summary_report(summary, diagnostics_path)
+        print(f"Report diagnosi infeasibilita' salvato in: {diagnostics_path}")
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return
 
