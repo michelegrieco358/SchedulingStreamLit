@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from typing import Iterable
 
 import pandas as pd
 
@@ -14,6 +15,7 @@ def load_history(
     employees_df: pd.DataFrame,
     shifts_df: pd.DataFrame,
     calendar_df: pd.DataFrame,
+    state_codes: Iterable[str] | None = None,
 ) -> pd.DataFrame:
     if not os.path.exists(path):
         return pd.DataFrame(
@@ -67,7 +69,14 @@ def load_history(
             f"{bad_rows}"
         )
 
-    known_shifts = set(shifts_df["shift_id"].astype(str).str.strip().unique())
+    known_shifts = set(shifts_df["shift_id"].astype(str).str.strip().str.upper().unique())
+    if state_codes is not None:
+        known_shifts.update(
+            str(code).strip().upper()
+            for code in state_codes
+            if str(code).strip()
+        )
+    df["turno"] = df["turno"].astype(str).str.strip().str.upper()
     bad_turni = sorted(set(df["turno"].unique()) - known_shifts)
     if bad_turni:
         raise LoaderError(f"history.csv: turni non presenti in shifts.csv: {bad_turni}")
@@ -137,23 +146,67 @@ def load_history(
             ]
         )
 
-    shift_cols = [
-        "shift_id",
-        "start_time",
-        "end_time",
-        "duration_min",
-        "crosses_midnight",
-    ]
-    shift_info = shifts_df[shift_cols].rename(
-        columns={
-            "shift_id": "turno",
-            "start_time": "shift_start_time",
-            "end_time": "shift_end_time",
-            "duration_min": "shift_duration_min",
-            "crosses_midnight": "shift_crosses_midnight",
-        }
-    )
-    df = df.merge(shift_info, on="turno", how="left", validate="many_to_one")
+    has_inline_timing = {"start", "end", "duration_min"}.issubset(df.columns)
+    if has_inline_timing:
+        def _to_timedelta_or_nat(s: str) -> pd.Timedelta | pd.NaTType:
+            value = str(s).strip()
+            if value == "":
+                return pd.NaT
+            if not pd.Series([value]).str.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$").iloc[0]:
+                raise LoaderError(
+                    f"history.csv: orario non valido (atteso HH:MM): {value!r}"
+                )
+            hh, mm = value.split(":", 1)
+            return pd.to_timedelta(int(hh), unit="h") + pd.to_timedelta(int(mm), unit="m")
+
+        start_td = df["start"].astype(str).map(_to_timedelta_or_nat)
+        end_td = df["end"].astype(str).map(_to_timedelta_or_nat)
+
+        duration_num = pd.to_numeric(df["duration_min"], errors="coerce")
+        has_duration_text = df["duration_min"].astype(str).str.strip().ne("")
+        bad_duration = has_duration_text & duration_num.isna()
+        if bad_duration.any():
+            bad_rows = df.loc[bad_duration, ["data", "employee_id", "turno", "duration_min"]].head()
+            raise LoaderError(
+                "history.csv: duration_min non numerico per le righe:\n"
+                f"{bad_rows}"
+            )
+
+        both_present = start_td.notna() & end_td.notna()
+        only_one = start_td.notna() ^ end_td.notna()
+        if only_one.any():
+            bad_rows = df.loc[only_one, ["data", "employee_id", "turno", "start", "end"]].head()
+            raise LoaderError(
+                "history.csv: start/end devono essere entrambi valorizzati o entrambi vuoti:\n"
+                f"{bad_rows}"
+            )
+
+        df["shift_start_time"] = start_td
+        df["shift_end_time"] = end_td
+        df["shift_duration_min"] = duration_num.fillna(0).astype(int)
+        df["shift_crosses_midnight"] = 0
+        df.loc[both_present, "shift_crosses_midnight"] = (
+            end_td[both_present] < start_td[both_present]
+        ).astype(int)
+    else:
+        shift_cols = [
+            "shift_id",
+            "start_time",
+            "end_time",
+            "duration_min",
+            "crosses_midnight",
+        ]
+        shift_info = shifts_df[shift_cols].rename(
+            columns={
+                "shift_id": "turno",
+                "start_time": "shift_start_time",
+                "end_time": "shift_end_time",
+                "duration_min": "shift_duration_min",
+                "crosses_midnight": "shift_crosses_midnight",
+            }
+        )
+        shift_info["turno"] = shift_info["turno"].astype(str).str.strip().str.upper()
+        df = df.merge(shift_info, on="turno", how="left", validate="many_to_one")
 
     df["shift_start_dt"] = df["data_dt"] + df["shift_start_time"]
     df["shift_end_dt"] = df["data_dt"] + df["shift_end_time"]

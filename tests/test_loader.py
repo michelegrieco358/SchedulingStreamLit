@@ -1609,6 +1609,77 @@ def test_load_history_keeps_only_days_before_horizon(tmp_path: Path) -> None:
     assert loaded["is_in_horizon"].fillna(False).astype(bool).sum() == 0
 
 
+def test_load_history_accepts_state_codes_and_inline_timing(tmp_path: Path) -> None:
+    calendar = build_calendar(date(2025, 11, 15), date(2025, 11, 16))
+    employees = pd.DataFrame({"employee_id": ["E1"]})
+    shifts = pd.DataFrame(
+        {
+            "shift_id": ["M"],
+            "start_time": [pd.to_timedelta(8, unit="h")],
+            "end_time": [pd.to_timedelta(16, unit="h")],
+            "duration_min": [480],
+            "crosses_midnight": [0],
+        }
+    )
+    history_df = pd.DataFrame(
+        {
+            "employee_id": ["E1", "E1"],
+            "data": ["2025-11-13", "2025-11-14"],
+            "turno": ["SN", "R"],
+            "start": ["22:00", ""],
+            "end": ["06:00", ""],
+            "duration_min": [480, 0],
+        }
+    )
+    path = tmp_path / "history.csv"
+    history_df.to_csv(path, index=False)
+
+    loaded = load_history(
+        str(path),
+        employees,
+        shifts,
+        calendar,
+        state_codes=("M", "P", "N", "G", "SN", "R", "F"),
+    )
+
+    assert list(loaded["turno"]) == ["SN", "R"]
+    row_sn = loaded.loc[loaded["turno"] == "SN"].iloc[0]
+    assert int(row_sn["shift_crosses_midnight"]) == 1
+    assert int(row_sn["shift_duration_min"]) == 480
+    row_r = loaded.loc[loaded["turno"] == "R"].iloc[0]
+    assert int(row_r["shift_crosses_midnight"]) == 0
+    assert int(row_r["shift_duration_min"]) == 0
+
+
+def test_load_all_filters_month_plan_to_horizon_before_slot_build(tmp_path: Path) -> None:
+    cfg = yaml.safe_load((DATA_DIR / "config.yaml").read_text(encoding="utf-8"))
+    cfg["horizon"] = {"start_date": "2025-11-15", "end_date": "2025-11-30"}
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    for src in DATA_CSV_DIR.glob("*.csv"):
+        shutil.copy(src, data_dir / src.name)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"locks\.csv: caricati .*",
+            category=UserWarning,
+        )
+        loaded = load_all(str(cfg_path), str(data_dir))
+
+    assert not loaded.month_plan_df.empty
+    assert pd.to_datetime(loaded.month_plan_df["data"]).min().date() == date(2025, 11, 15)
+    assert loaded.month_plan_df["is_in_horizon"].astype(bool).all()
+
+    assert not loaded.shift_slots_df.empty
+    assert pd.to_datetime(loaded.shift_slots_df["data"]).min().date() == date(2025, 11, 15)
+    assert loaded.shift_slots_df["is_in_horizon"].astype(bool).all()
+
+
 def test_get_absence_hours_from_config_and_load_all_smoke(tmp_path: Path) -> None:
     cfg = load_config(str(DATA_DIR / 'config.yaml'))
     assert get_absence_hours_from_config(cfg) == pytest.approx(6.0)

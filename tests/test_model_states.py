@@ -445,3 +445,56 @@ def test_cross_assignment_limit_enforced_cap() -> None:
     status = solver.Solve(artifacts.model)
 
     assert status == cp_model.INFEASIBLE
+
+
+def test_pre_horizon_state_is_fixed_from_history() -> None:
+    leaves = pd.DataFrame(columns=["employee_id", "date"])
+    history = pd.DataFrame(
+        {
+            "employee_id": ["E1"],
+            "turno": ["F"],
+            "data": ["2025-01-01"],
+        }
+    )
+    context = _make_basic_context(
+        leaves,
+        history=history,
+        calendar_dates=[pd.Timestamp("2025-01-01"), pd.Timestamp("2025-01-02")],
+        slots=pd.DataFrame(
+            {
+                "slot_id": [1],
+                "shift_code": ["M"],
+                "date": [pd.Timestamp("2025-01-02")],
+            }
+        ),
+        cfg_extra={
+            "horizon": {"start_date": "2025-01-02", "end_date": "2025-01-02"},
+        },
+    )
+    artifacts = build_model(context)
+    solver = _solve_model(artifacts)
+
+    assert solver.Value(artifacts.state_vars[(0, 0, "F")]) == 1
+    assert solver.Value(artifacts.state_vars[(0, 0, "R")]) == 0
+
+
+def test_pre_horizon_state_defaults_to_rest_when_missing_in_history() -> None:
+    leaves = pd.DataFrame(columns=["employee_id", "date"])
+    context = _make_basic_context(
+        leaves,
+        calendar_dates=[pd.Timestamp("2025-01-01"), pd.Timestamp("2025-01-02")],
+        slots=pd.DataFrame(
+            {
+                "slot_id": [1],
+                "shift_code": ["M"],
+                "date": [pd.Timestamp("2025-01-02")],
+            }
+        ),
+        cfg_extra={
+            "horizon": {"start_date": "2025-01-02", "end_date": "2025-01-02"},
+        },
+    )
+    artifacts = build_model(context)
+    solver = _solve_model(artifacts)
+
+    assert solver.Value(artifacts.state_vars[(0, 0, "R")]) == 1
