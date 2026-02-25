@@ -169,6 +169,15 @@ def build_model(context: ModelContext) -> ModelArtifacts:
             vars_for_day = [state_vars[(emp_idx, day_idx, state)] for state in state_codes]
             model.Add(sum(vars_for_day) == 1)
 
+    _fix_pre_horizon_states(
+        context,
+        model,
+        state_vars,
+        state_codes,
+        bundle,
+        eid_of,
+    )
+
     absence_state = _resolve_absence_state_code(context.cfg, state_codes)
     absence_pairs: set[tuple[int, int]] = set()
     if absence_state is not None:
@@ -628,6 +637,71 @@ def _collect_prev_night_pairs(
         if day_idx is not None:
             result.add((emp_idx, day_idx))
     return result
+
+
+def _fix_pre_horizon_states(
+    context: ModelContext,
+    model: cp_model.CpModel,
+    state_vars: Mapping[tuple[int, int, str], cp_model.IntVar],
+    state_codes: Iterable[str],
+    bundle: Mapping[str, object],
+    eid_of: Mapping[str, int],
+) -> None:
+    """Fix pre-horizon day states from history, defaulting to rest state when missing."""
+
+    did_of: Mapping[object, int] = bundle.get("did_of", {})  # type: ignore[assignment]
+    if not did_of:
+        return
+
+    horizon_cfg = context.cfg.get("horizon") if isinstance(context.cfg, Mapping) else None
+    horizon_start = (
+        _parse_date_value(horizon_cfg.get("start_date"))
+        if isinstance(horizon_cfg, Mapping)
+        else None
+    )
+    if horizon_start is None:
+        return
+
+    horizon_start_idx = did_of.get(horizon_start)
+    if horizon_start_idx is None or horizon_start_idx <= 0:
+        return
+
+    normalized_states = tuple(str(code).strip().upper() for code in state_codes if str(code).strip())
+    state_set = set(normalized_states)
+    default_rest = "R" if "R" in state_set else ("F" if "F" in state_set else None)
+    if default_rest is None:
+        raise ValueError(
+            "Impossibile fissare gli stati pre-orizzonte: manca uno stato di riposo ('R' o 'F')."
+        )
+
+    history = context.history
+    history_lookup: dict[tuple[int, int], str] = {}
+    if history is not None and not history.empty and {"employee_id", "turno"}.issubset(history.columns):
+        work = history.loc[:, ["employee_id", "turno", "data"]].copy()
+        work["employee_id"] = work["employee_id"].astype(str).str.strip()
+        work["turno"] = work["turno"].astype(str).str.strip().str.upper()
+        work["_day"] = pd.to_datetime(work["data"], errors="coerce").dt.date
+        work = work.loc[work["_day"].notna() & work["turno"].isin(state_set)]
+
+        for employee_id, day, state in work.loc[:, ["employee_id", "_day", "turno"]].itertuples(index=False):
+            emp_idx = eid_of.get(employee_id)
+            day_idx = did_of.get(day)
+            if emp_idx is None or day_idx is None or day_idx >= horizon_start_idx:
+                continue
+            history_lookup[(emp_idx, day_idx)] = state
+
+    num_employees = int(bundle.get("num_employees", len(eid_of)))
+    for emp_idx in range(num_employees):
+        for day_idx in range(horizon_start_idx):
+            chosen = history_lookup.get((emp_idx, day_idx), default_rest)
+            for state in normalized_states:
+                var = state_vars.get((emp_idx, day_idx, state))
+                if var is None:
+                    continue
+                if state == chosen:
+                    model.Add(var == 1)
+                else:
+                    model.Add(var == 0)
 
 
 def _ensure_state_indicator(

@@ -90,6 +90,15 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
     cfg = load_config(config_path)
     start_date = _parse_date(cfg["horizon"]["start_date"])
     end_date = _parse_date(cfg["horizon"]["end_date"])
+    raw_state_codes = cfg.get("state_codes") if isinstance(cfg, dict) else None
+    if raw_state_codes:
+        state_codes = tuple(
+            str(code).strip().upper()
+            for code in raw_state_codes
+            if str(code).strip()
+        )
+    else:
+        state_codes = ("M", "P", "N", "G", "SN", "R", "F")
 
     defaults = cfg.get("defaults", {})
     absence_hours_h = get_absence_hours_from_config(cfg)
@@ -156,6 +165,12 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
     validate_groups_roles(groups_df, roles_df, eligibility_df)
 
     month_plan_df = attach_calendar(month_plan_df, calendar_df)
+    month_plan_df = (
+        month_plan_df.loc[
+            month_plan_df["is_in_horizon"].astype("boolean", copy=False).fillna(False)
+        ]
+        .reset_index(drop=True)
+    )
     shift_slots_df = build_shift_slots(
         month_plan_df, shifts_df, dept_shift_map_df, defaults
     )
@@ -195,6 +210,7 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
         employees_df,
         shifts_df,
         calendar_df,
+        state_codes=state_codes,
     )
     leaves_df, leaves_days_df = load_leaves(
         os.path.join(data_dir, "leaves.csv"),
