@@ -835,7 +835,12 @@ def build_all(dfs: dict, cfg: dict) -> dict:
             candidates["is_night"].astype("boolean", copy=False).fillna(False).astype(bool)
         )
         if "can_work_night" in candidates.columns:
-            can_night = candidates["can_work_night"].fillna(True).astype(bool)
+            # NOTE:
+            # can_work_night may arrive as object dtype when loaded from CSV
+            # (mix of booleans/strings/empty values). Casting to pandas'
+            # nullable BooleanDtype before fillna avoids silent downcasting
+            # warnings and keeps behavior explicit: missing -> True.
+            can_night = candidates["can_work_night"].astype("boolean", copy=False).fillna(True).astype(bool)
             candidates = candidates[~(night_mask & ~can_night)]
         else:
             candidates = candidates[~night_mask]
