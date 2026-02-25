@@ -4,6 +4,7 @@ from datetime import date
 
 import pandas as pd
 import pytest
+import warnings
 
 from loader.calendar import build_calendar
 from src.preprocessing import build_all
@@ -144,3 +145,56 @@ def test_month_to_date_summary_empty_when_horizon_starts_month() -> None:
     summary = bundle["history_month_to_date"]
 
     assert summary.empty
+
+
+def test_build_all_handles_nullable_can_work_night_without_futurewarning() -> None:
+    start = date(2025, 11, 1)
+    end = date(2025, 11, 2)
+    cfg = _make_cfg(start, end)
+    calendar_df = build_calendar(start, end)
+
+    employees_df = pd.DataFrame(
+        {
+            "employee_id": ["E1", "E2"],
+            "reparto_id": ["CARD", "CARD"],
+            "role": ["INFERMIERE", "INFERMIERE"],
+            "can_work_night": [False, None],
+        }
+    )
+    shift_slots_df = pd.DataFrame(
+        {
+            "slot_id": [1],
+            "reparto_id": ["CARD"],
+            "shift_code": ["N"],
+            "coverage_code": ["BASE"],
+            "date": [start.isoformat()],
+            "duration_min": [630],
+            "start_datetime": [pd.Timestamp(f"{start.isoformat()} 21:00:00")],
+            "end_datetime": [pd.Timestamp(f"{end.isoformat()} 07:30:00")],
+            "is_night": [True],
+        }
+    )
+
+    dfs = {
+        "employees_df": employees_df,
+        "shift_slots_df": shift_slots_df,
+        "calendar_df": calendar_df,
+    }
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        bundle = build_all(dfs, cfg)
+
+    downcasting_warnings = [
+        warning
+        for warning in captured
+        if issubclass(warning.category, FutureWarning)
+        and "Downcasting object dtype arrays" in str(warning.message)
+    ]
+    assert not downcasting_warnings
+
+    sid_of = bundle["sid_of"]
+    eid_of = bundle["eid_of"]
+    eligible_eids = bundle["eligible_eids"]
+
+    assert eligible_eids[sid_of[1]] == [eid_of["E2"]]
