@@ -1,4 +1,4 @@
-"""Esegue il caricamento dei dati e risolve il modello CP-SAT con logging del gap."""
+﻿"""Esegue il caricamento dei dati e risolve il modello CP-SAT con logging del gap."""
 
 from __future__ import annotations
 
@@ -9,20 +9,10 @@ from typing import Optional
 
 from ortools.sat.python import cp_model
 
-from src.diagnostics import (
-    build_infeasibility_summary,
-    write_infeasibility_summary_report,
-)
-from src.objective_report import (
-    compute_objective_breakdown,
-    write_objective_breakdown_report,
-)
-from src.solver import build_solver_from_sources
-from src.warm_start import (
-    WarmStartError,
-    apply_slot_warm_start_hints,
-    load_slot_warm_start,
-)
+from src.diagnostics import write_infeasibility_summary_report
+from src.objective_report import write_objective_breakdown_report
+from src.solve_service import solve_schedule
+from src.warm_start import WarmStartError, load_slot_warm_start
 
 
 class GapLoggingCallback(cp_model.CpSolverSolutionCallback):
@@ -134,33 +124,29 @@ def main() -> None:
     else:
         stability_override = None
 
-    model, artifacts, context, bundle = build_solver_from_sources(
+    warm_df = None
+    if str(args.warm_start_file).strip():
+        try:
+            warm_df = load_slot_warm_start(args.warm_start_file)
+        except WarmStartError as exc:
+            raise SystemExit(f"Errore warm start: {exc}") from exc
+
+    callback = GapLoggingCallback()
+    result = solve_schedule(
         args.config,
         args.data_dir,
         selected_departments=selected_departments or None,
         stability_enabled=stability_override,
+        max_time_s=args.max_time,
+        seed=args.seed,
+        num_workers=args.num_workers,
+        warm_start_df=warm_df,
+        warm_start_strict=bool(args.warm_start_strict),
+        solution_callback=callback,
     )
 
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = args.max_time
-    if args.seed is not None:
-        solver.parameters.random_seed = int(args.seed)
-    if args.num_workers is not None:
-        solver.parameters.num_search_workers = int(args.num_workers)
-
-    if str(args.warm_start_file).strip():
-        try:
-            warm_df = load_slot_warm_start(args.warm_start_file)
-            stats = apply_slot_warm_start_hints(
-                model,
-                artifacts.assign_vars,
-                bundle,
-                warm_df,
-                strict=bool(args.warm_start_strict),
-            )
-        except WarmStartError as exc:
-            raise SystemExit(f"Errore warm start: {exc}") from exc
-
+    if result.warm_start_stats is not None:
+        stats = result.warm_start_stats
         print(
             "Warm start hints: "
             f"read={stats.rows_read} "
@@ -172,15 +158,9 @@ def main() -> None:
             f"duplicates={stats.duplicate_pairs}"
         )
 
-    callback = GapLoggingCallback()
-    if hasattr(solver, "SolveWithSolutionCallback"):
-        status = solver.SolveWithSolutionCallback(model, callback)
-    else:  # compatibilità con versioni OR-Tools più vecchie
-        status = solver.Solve(model, callback)
-
-    print("Solver status:", solver.StatusName(status))
-    if status == cp_model.INFEASIBLE:
-        summary = build_infeasibility_summary(context)
+    print("Solver status:", result.status_name)
+    if result.status_code == cp_model.INFEASIBLE:
+        summary = result.infeasibility_summary or {"top_causes": []}
         print("Diagnosi infeasibilita':")
         for idx, cause in enumerate(summary.get("top_causes", []), start=1):
             title = str(cause.get("title", "")).strip()
@@ -194,16 +174,17 @@ def main() -> None:
         diagnostics_path = Path("infeasibility_diagnostics.txt")
         write_infeasibility_summary_report(summary, diagnostics_path)
         print(f"Report diagnosi infeasibilita' salvato in: {diagnostics_path}")
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    if result.status_code not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return
 
-    print("Objective value:", solver.ObjectiveValue())
-    print("Assegnazioni candidate:", len(artifacts.assign_vars))
-    print("Dipendenti considerati:", len(context.employees))
+    print("Objective value:", result.objective_value)
+    print("Assegnazioni candidate:", len(result.artifacts.assign_vars))
+    print("Dipendenti considerati:", len(result.context.employees))
 
-    breakdown = compute_objective_breakdown(solver, artifacts)
+    if result.objective_breakdown is None:
+        return
     report_path = Path("objective_breakdown.txt")
-    write_objective_breakdown_report(breakdown, report_path)
+    write_objective_breakdown_report(result.objective_breakdown, report_path)
     print(f"Report funzione obiettivo salvato in: {report_path}")
 
 

@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 _HAS_API = True
 try:
-    from src.solver import build_solver_from_sources
+    from src.solve_service import solve_schedule
 except Exception:
     _HAS_API = False
 
@@ -134,20 +134,18 @@ def _build_assignments_df(solver, artifacts, bundle):
     return df.sort_values(by=[c for c in ["date","reparto_id","shift_code","employee_id"] if c in df.columns]).reset_index(drop=True)
 
 def _solve_inprocess(cfg_path, data_dir, time_limit_s, gap_rel, log_flag, selected_departments=None):
-    from src.solver import build_solver_from_sources
-    model, artifacts, context, bundle = build_solver_from_sources(
+    from src.solve_service import solve_schedule
+    result = solve_schedule(
         str(cfg_path),
         str(data_dir),
         selected_departments=selected_departments,
+        max_time_s=time_limit_s,
+        relative_gap_limit=gap_rel if gap_rel > 0 else None,
+        log_search_progress=bool(log_flag),
+        log_to_stdout=False,
+        solution_callback=LiveSolutionCallback(log_queue),
     )
-    solver = cp_model.CpSolver()
-    if time_limit_s > 0: solver.parameters.max_time_in_seconds = float(time_limit_s)
-    if gap_rel > 0: solver.parameters.relative_gap_limit = float(gap_rel)
-    solver.parameters.log_search_progress = log_flag
-    solver.parameters.log_to_stdout = False
-    cb = LiveSolutionCallback(log_queue)
-    status = solver.Solve(model, cb)
-    return solver, status, artifacts, bundle
+    return result.solver, result.status_code, result.artifacts, result.bundle
 
 # ===== CLI mode =====
 def _reader_thread(proc, q):
