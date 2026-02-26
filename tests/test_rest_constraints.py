@@ -22,11 +22,18 @@ def _make_rest_context(
     employee_weekly_override: int | None = None,
     employee_biweekly_override: int | None = None,
     history_rows: Iterable[dict[str, object]] | None = None,
+    slot_start_hour: int = 7,
+    slot_shift_codes: Iterable[str] | None = None,
 ) -> ModelContext:
     slot_days = list(slot_days)
     gap_hours = list(gap_hours)
     slot_ids = list(range(1, len(slot_days) + 1))
     slot_dates = [pd.to_datetime(day).date() for day in slot_days]
+
+    if slot_shift_codes is not None:
+        shift_codes = list(slot_shift_codes)
+    else:
+        shift_codes = ["M"] * len(slot_ids)
 
     employees = pd.DataFrame(
         {
@@ -42,13 +49,19 @@ def _make_rest_context(
     if employee_biweekly_override is not None:
         employees["biweekly_rest_min_days"] = [employee_biweekly_override]
 
+    slot_start_dts = [
+        pd.Timestamp(day) + pd.Timedelta(hours=slot_start_hour)
+        for day in slot_dates
+    ]
+
     slots = pd.DataFrame(
         {
             "slot_id": slot_ids,
-            "shift_code": ["M"] * len(slot_ids),
+            "shift_code": shift_codes,
             "reparto_id": ["DEP"] * len(slot_ids),
             "date": slot_dates,
             "duration_min": [480] * len(slot_ids),
+            "start_dt": slot_start_dts,
         }
     )
 
@@ -508,3 +521,121 @@ def test_biweekly_rest_constraint_uses_history_window() -> None:
     status_insufficient = solver.Solve(model_insufficient)
 
     assert status_insufficient == cp_model.INFEASIBLE
+
+
+def test_rest11_boundary_violation_is_soft() -> None:
+    """History P ends at 21:30 on Dec 31, planned M starts at 07:00 on Jan 1.
+    Gap = 9.5h < 11h → violation.  monthly_limit=2 → FEASIBLE with violation=1."""
+    horizon_start = date(2025, 1, 1)
+    horizon_end = date(2025, 1, 1)
+
+    history_rows = [
+        {
+            "employee_id": "E1",
+            "turno": "P",
+            "data": "2024-12-31",
+            "shift_end_dt": pd.Timestamp("2024-12-31 21:30"),
+            "shift_duration_min": 420,
+        },
+    ]
+
+    context = _make_rest_context(
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        slot_days=["2025-01-01"],
+        gap_hours=[],
+        rest_threshold=11.0,
+        monthly_limit=2,
+        consecutive_limit=2,
+        history_rows=history_rows,
+        slot_start_hour=7,
+    )
+
+    artifacts = build_model(context)
+    model = artifacts.model
+
+    sid_of = artifacts.slot_index
+    x = artifacts.assign_vars
+
+    model.Add(x[(0, sid_of[1])] == 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    boundary_var = artifacts.rest_violation_pairs[(0, -1, sid_of[1])]
+    assert solver.Value(boundary_var) == 1
+
+
+def test_rest11_boundary_violation_blocked_by_monthly_limit() -> None:
+    """Same boundary violation as above but monthly_limit=0 → INFEASIBLE."""
+    horizon_start = date(2025, 1, 1)
+    horizon_end = date(2025, 1, 1)
+
+    history_rows = [
+        {
+            "employee_id": "E1",
+            "turno": "P",
+            "data": "2024-12-31",
+            "shift_end_dt": pd.Timestamp("2024-12-31 21:30"),
+            "shift_duration_min": 420,
+        },
+    ]
+
+    context = _make_rest_context(
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        slot_days=["2025-01-01"],
+        gap_hours=[],
+        rest_threshold=11.0,
+        monthly_limit=0,
+        consecutive_limit=5,
+        history_rows=history_rows,
+        slot_start_hour=7,
+    )
+
+    artifacts = build_model(context)
+    model = artifacts.model
+
+    sid_of = artifacts.slot_index
+    x = artifacts.assign_vars
+
+    model.Add(x[(0, sid_of[1])] == 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status == cp_model.INFEASIBLE
+
+
+def test_rest11_no_boundary_violation_when_gap_sufficient() -> None:
+    """History M ends at 14:30 on Dec 31, planned M starts at 07:00 on Jan 1.
+    Gap = 16.5h > 11h → no violation variable created."""
+    horizon_start = date(2025, 1, 1)
+    horizon_end = date(2025, 1, 1)
+
+    history_rows = [
+        {
+            "employee_id": "E1",
+            "turno": "M",
+            "data": "2024-12-31",
+            "shift_end_dt": pd.Timestamp("2024-12-31 14:30"),
+            "shift_duration_min": 420,
+        },
+    ]
+
+    context = _make_rest_context(
+        horizon_start=horizon_start,
+        horizon_end=horizon_end,
+        slot_days=["2025-01-01"],
+        gap_hours=[],
+        rest_threshold=11.0,
+        monthly_limit=2,
+        consecutive_limit=2,
+        history_rows=history_rows,
+        slot_start_hour=7,
+    )
+
+    artifacts = build_model(context)
+
+    assert (0, -1, artifacts.slot_index[1]) not in artifacts.rest_violation_pairs

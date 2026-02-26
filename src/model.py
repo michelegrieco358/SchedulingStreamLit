@@ -4520,6 +4520,109 @@ def _build_rest_history_counts(
     return result
 
 
+def _build_last_history_shift_end(
+    history: pd.DataFrame | None,
+    eid_of: Mapping[str, int],
+) -> dict[int, pd.Timestamp]:
+    """Return {emp_idx: last_shift_end_dt} for employees with working history."""
+    if history is None or history.empty:
+        return {}
+    required = {"employee_id", "shift_end_dt", "shift_duration_min"}
+    if not required.issubset(history.columns):
+        return {}
+
+    work = history.copy()
+    work["shift_end_dt"] = pd.to_datetime(work["shift_end_dt"], errors="coerce")
+    work["shift_duration_min"] = pd.to_numeric(work["shift_duration_min"], errors="coerce").fillna(0)
+    work = work.loc[(work["shift_duration_min"] > 0) & work["shift_end_dt"].notna()]
+    if work.empty:
+        return {}
+
+    result: dict[int, pd.Timestamp] = {}
+    for emp_id, grp in work.groupby("employee_id"):
+        emp_idx = eid_of.get(str(emp_id).strip())
+        if emp_idx is None:
+            continue
+        last_end = grp["shift_end_dt"].max()
+        if pd.notna(last_end):
+            result[emp_idx] = last_end
+    return result
+
+
+def _add_history_boundary_violations(
+    context: ModelContext,
+    model: cp_model.CpModel,
+    assign_vars: Dict[tuple[int, int], cp_model.IntVar],
+    sid_of: Mapping[int, int],
+    slot_date2: Mapping[int, int],
+    eligible_sets: dict[int, set[int]],
+    eid_of: Mapping[str, int],
+    day_month_map: Mapping[int, str],
+    rest_threshold: float,
+    pair_map: dict[tuple[int, int], list],
+    month_pair_map: dict[tuple[int, str], list],
+    pair_vars: dict,
+) -> None:
+    """Add rest-11h violation variables for the boundary between last history
+    shift and first planned slots.
+
+    Unlike planned-to-planned pairs where violation = (assign1 AND assign2),
+    the history shift is a certainty, so violation = assign_var (if the employee
+    is assigned to the slot, the violation is guaranteed).
+    """
+    last_ends = _build_last_history_shift_end(context.history, eid_of)
+    if not last_ends:
+        return
+
+    slots = context.slots
+    if slots is None or slots.empty or "start_dt" not in slots.columns or "slot_id" not in slots.columns:
+        return
+
+    slot_start_map: dict[int, pd.Timestamp] = {}
+    for row in slots.itertuples(index=False):
+        slot_id = getattr(row, "slot_id", None)
+        start_dt = getattr(row, "start_dt", None)
+        if slot_id is None or pd.isna(start_dt):
+            continue
+        slot_idx = sid_of.get(int(slot_id))
+        if slot_idx is not None:
+            slot_start_map[slot_idx] = pd.Timestamp(start_dt)
+
+    if not slot_start_map:
+        return
+
+    for emp_idx, last_end_dt in last_ends.items():
+        last_end_ts = pd.Timestamp(last_end_dt)
+        max_check_dt = last_end_ts + pd.Timedelta(hours=max(rest_threshold, 48))
+
+        for slot_idx, slot_start_dt in slot_start_map.items():
+            if slot_start_dt > max_check_dt:
+                continue
+
+            gap_hours = (slot_start_dt - last_end_ts).total_seconds() / 3600.0
+            if gap_hours >= rest_threshold - 1e-6:
+                continue
+
+            if emp_idx not in eligible_sets.get(slot_idx, set()):
+                continue
+
+            assign_var = assign_vars.get((emp_idx, slot_idx))
+            if assign_var is None:
+                continue
+
+            var = model.NewBoolVar(f"rest11_boundary_e{emp_idx}_s{slot_idx}")
+            model.Add(var == assign_var)
+
+            pair_vars[(emp_idx, -1, slot_idx)] = var
+
+            day_idx = slot_date2.get(slot_idx)
+            if day_idx is not None:
+                pair_map.setdefault((emp_idx, day_idx), []).append(var)
+                month_id = day_month_map.get(day_idx)
+                if month_id is not None:
+                    month_pair_map.setdefault((emp_idx, month_id), []).append(var)
+
+
 def _add_rest_constraints(
     context: ModelContext,
     model: cp_model.CpModel,
@@ -4538,13 +4641,6 @@ def _add_rest_constraints(
 
     rest_threshold = _resolve_rest_threshold(context.cfg if isinstance(context.cfg, Mapping) else {})
     if rest_threshold <= 0:
-        return result
-
-    gap_pairs = context.gap_pairs
-    if gap_pairs is None or gap_pairs.empty:
-        return result
-
-    if not {"s1_id", "s2_id", "gap_hours"}.issubset(gap_pairs.columns):
         return result
 
     sid_of: Mapping[int, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
@@ -4585,62 +4681,74 @@ def _add_rest_constraints(
     month_pair_map: dict[tuple[int, str], list[cp_model.BoolVar]] = {}
     pair_vars: dict[tuple[int, int, int], cp_model.BoolVar] = {}
 
-    work = gap_pairs.loc[:, ["s1_id", "s2_id", "gap_hours"]].copy()
-    work = work.dropna(subset=["s1_id", "s2_id", "gap_hours"])
-    if work.empty:
+    # --- Gap pairs planned-to-planned ---
+    gap_pairs = context.gap_pairs
+    has_gap_pairs = (
+        gap_pairs is not None
+        and not gap_pairs.empty
+        and {"s1_id", "s2_id", "gap_hours"}.issubset(gap_pairs.columns)
+    )
+    if has_gap_pairs:
+        work = gap_pairs.loc[:, ["s1_id", "s2_id", "gap_hours"]].copy()
+        work = work.dropna(subset=["s1_id", "s2_id", "gap_hours"])
+        work["gap_hours"] = pd.to_numeric(work["gap_hours"], errors="coerce")
+        work = work[pd.notna(work["gap_hours"])]
+
+        if not work.empty:
+            violation_pairs = work.loc[work["gap_hours"] < rest_threshold - 1e-6]
+            for row in violation_pairs.itertuples(index=False):
+                try:
+                    s1_id = int(getattr(row, "s1_id"))
+                    s2_id = int(getattr(row, "s2_id"))
+                except Exception:
+                    continue
+                s1_idx = sid_of.get(s1_id)
+                s2_idx = sid_of.get(s2_id)
+                if s1_idx is None or s2_idx is None:
+                    continue
+
+                day_idx = slot_date2.get(s2_idx)
+                if day_idx is None:
+                    continue
+                month_id = day_month_map.get(day_idx)
+
+                elig1 = eligible_sets.get(s1_idx, set())
+                elig2 = eligible_sets.get(s2_idx, set())
+                if not elig1 or not elig2:
+                    continue
+                common = elig1 & elig2
+                if not common:
+                    continue
+
+                for emp_idx in common:
+                    assign1 = assign_vars.get((emp_idx, s1_idx))
+                    assign2 = assign_vars.get((emp_idx, s2_idx))
+                    if assign1 is None or assign2 is None:
+                        continue
+
+                    var = model.NewBoolVar(f"rest11_violation_e{emp_idx}_s{s1_idx}_s{s2_idx}")
+                    model.Add(assign1 + assign2 - 1 <= var)
+                    model.Add(var <= assign1)
+                    model.Add(var <= assign2)
+
+                    pair_vars[(emp_idx, s1_idx, s2_idx)] = var
+
+                    day_key = (emp_idx, day_idx)
+                    pair_map.setdefault(day_key, []).append(var)
+
+                    if month_id is not None:
+                        month_pair_map.setdefault((emp_idx, month_id), []).append(var)
+
+    # --- History-to-planned boundary violations ---
+    _add_history_boundary_violations(
+        context, model, assign_vars,
+        sid_of, slot_date2, eligible_sets, eid_of,
+        day_month_map, rest_threshold,
+        pair_map, month_pair_map, pair_vars,
+    )
+
+    if not pair_map and not month_pair_map:
         return result
-
-    work["gap_hours"] = pd.to_numeric(work["gap_hours"], errors="coerce")
-    work = work[pd.notna(work["gap_hours"])]
-    if work.empty:
-        return result
-
-    violation_pairs = work.loc[work["gap_hours"] < rest_threshold - 1e-6]
-    if violation_pairs.empty:
-        return result
-
-    for row in violation_pairs.itertuples(index=False):
-        try:
-            s1_id = int(getattr(row, "s1_id"))
-            s2_id = int(getattr(row, "s2_id"))
-        except Exception:
-            continue
-        s1_idx = sid_of.get(s1_id)
-        s2_idx = sid_of.get(s2_id)
-        if s1_idx is None or s2_idx is None:
-            continue
-
-        day_idx = slot_date2.get(s2_idx)
-        if day_idx is None:
-            continue
-        month_id = day_month_map.get(day_idx)
-
-        elig1 = eligible_sets.get(s1_idx, set())
-        elig2 = eligible_sets.get(s2_idx, set())
-        if not elig1 or not elig2:
-            continue
-        common = elig1 & elig2
-        if not common:
-            continue
-
-        for emp_idx in common:
-            assign1 = assign_vars.get((emp_idx, s1_idx))
-            assign2 = assign_vars.get((emp_idx, s2_idx))
-            if assign1 is None or assign2 is None:
-                continue
-
-            var = model.NewBoolVar(f"rest11_violation_e{emp_idx}_s{s1_idx}_s{s2_idx}")
-            model.Add(assign1 + assign2 - 1 <= var)
-            model.Add(var <= assign1)
-            model.Add(var <= assign2)
-
-            pair_vars[(emp_idx, s1_idx, s2_idx)] = var
-
-            day_key = (emp_idx, day_idx)
-            pair_map.setdefault(day_key, []).append(var)
-
-            if month_id is not None:
-                month_pair_map.setdefault((emp_idx, month_id), []).append(var)
 
     num_employees = int(bundle.get("num_employees", len(eid_of)))
     num_days = int(bundle.get("num_days", len(slot_date2)))
