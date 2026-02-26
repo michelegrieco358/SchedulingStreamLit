@@ -5,16 +5,14 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, Mapping
 
-import pandas as pd
 from ortools.sat.python import cp_model
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.model import ModelArtifacts
+from src.solve_service import _build_state_table
 from src.solver import build_solver_from_sources
 
 
@@ -47,45 +45,6 @@ def _parse_args() -> argparse.Namespace:
         help="Limite di tempo in secondi per CP-SAT (opzionale).",
     )
     return parser.parse_args()
-
-
-def _build_state_table(
-    solver: cp_model.CpSolver,
-    artifacts: ModelArtifacts,
-    bundle: Mapping[str, object],
-) -> pd.DataFrame:
-    emp_of: Mapping[int, str] = bundle.get("emp_of", {})  # type: ignore[assignment]
-    date_of: Mapping[int, object] = bundle.get("date_of", {})  # type: ignore[assignment]
-
-    if not emp_of or not date_of:
-        raise RuntimeError("Bundle privo delle mappe necessarie (emp_of/date_of).")
-
-    state_codes: Iterable[str] = artifacts.state_codes
-
-    rows: list[dict[str, object]] = []
-    for emp_idx in sorted(emp_of.keys()):
-        employee_id = emp_of[emp_idx]
-        for day_idx in sorted(date_of.keys()):
-            day = date_of[day_idx]
-            state_value = ""
-            for code in state_codes:
-                var = artifacts.state_vars.get((emp_idx, day_idx, code))
-                if var is None:
-                    continue
-                if solver.Value(var):
-                    state_value = code
-                    break
-            rows.append(
-                {
-                    "employee_id": employee_id,
-                    "date": str(day),
-                    "state": state_value,
-                }
-            )
-
-    df = pd.DataFrame(rows)
-    df = df.sort_values(["date", "employee_id"]).reset_index(drop=True)
-    return df
 
 
 def main() -> int:
