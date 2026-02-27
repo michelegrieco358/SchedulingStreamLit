@@ -1,0 +1,493 @@
+﻿<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SKYppm - Piano Programmazione Mensile</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+
+    <div class="app-container">
+        <!-- Sidebar Menu -->
+        <nav class="sidebar collapsed" id="sidebar">
+            <div class="sidebar-header">
+                <div>MenÃ¹</div>
+                <button class="hamburger-btn" id="sidebar-toggle" title="Toggle Menu">â°</button>
+            </div>
+            <ul class="menu-list">
+                <!-- Removed Principale -->
+                <li class="menu-item-l1">
+                    <span><span class="menu-icon">âï¸</span> <span class="menu-text">Elaborazioni</span></span>
+                    <ul class="menu-l2">
+                        <li id="menu-assign-profile"><span class="menu-l2-icon">ð¤</span> Assegnazione profilo orario</li>
+                        <li><span class="menu-l2-icon">ð</span> Sviluppo piano orario</li>
+                        <li><span class="menu-l2-icon">ð</span> Aggiornamento piano orario</li>
+                        <li><span class="menu-l2-icon">ð</span> Definisci mese corrente</li>
+                        <li><span class="menu-l2-icon">ð</span> Aggiorna situazione mensile</li>
+                        <li><span class="menu-l2-icon">â</span> Aggiorna copertura</li>
+                        <li><span class="menu-l2-icon">â³</span> Giustificativi in sospeso</li>
+                    </ul>
+                </li>
+                <li class="menu-item-l1">
+                    <span><span class="menu-icon">ð¨ï¸</span> <span class="menu-text">Stampe</span></span>
+                    <ul class="menu-l2">
+                        <li><span class="menu-l2-icon">ð</span> Programmazione mensile (A4)</li>
+                    </ul>
+
+
+                <li class="menu-item-l1">
+                    <span><span class="menu-icon">ð§</span> <span class="menu-text">Configurazione</span></span>
+                    <ul class="menu-l2">
+                        <li><label style="cursor: pointer;"><input type="checkbox" checked> <span class="menu-l2-icon">ð¬</span> Conferma operazioni</label></li>
+                        <li><label style="cursor: pointer;"><input type="checkbox" checked> <span class="menu-l2-icon">ð</span> Aggiorn. auto. mensile</label></li>
+                        <li><label style="cursor: pointer;"><input type="checkbox" checked> <span class="menu-l2-icon">ð</span> Aggiorn. auto. copertura</label></li>
+                    </ul>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Main Layout Column -->
+        <div class="main-layout">
+            <!-- Header Section - Design Moderno -->
+            <header>
+                <div class="header-brand">
+                    <img src="sky_logo_bianco.png" alt="SKY Logo" />
+                    <div class="title">SKYppm - Piano di programmazione mensile</div>
+                </div>
+                <div class="header-actions">
+                    <button class="filter-toggle-btn" id="filter-toggle" title="Mostra/Nascondi Filtri">
+                        <span class="icon">â</span>
+                        <span>Filtri</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Pannello Filtri Slide-down (fuori dall'header) -->
+            <div class="filters-panel" id="filters-panel">
+                <div class="filters">
+                    <div class="filter-group">
+                        <label for="year-filter">Anno</label>
+                        <select id="year-filter">
+                            <option value="2025">2025</option>
+                            <option value="2026" selected>2026</option>
+                            <option value="2027">2027</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Mesi</label>
+                        <div class="multi-select-dropdown" id="month-multiselect">
+                            <span id="month-select-label" class="month-select-trigger">Seleziona Mesi â¾</span>
+                            <div class="multi-select-options" id="month-options">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="filter-group">
+                        <label for="dept-filter">Reparto</label>
+                        <select id="dept-filter">
+                            <option value="all">Tutti i Reparti</option>
+                            <option value="IT">IT - Sviluppo</option>
+                            <option value="HR">HR - Risorse Umane</option>
+                            <option value="SALES">Vendite</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="emp-filter">Dipendente</label>
+                        <select id="emp-filter">
+                            <option value="all">Tutti</option>
+                            <!-- Dynamically populated -->
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Toolbar -->
+            <div class="toolbar">
+                <button class="tool-btn" id="btn-detail-view" title="Dettaglio Giorno">ð<span
+                        class="tool-label">Dettaglio
+                        giorno</span></button>
+                <button class="tool-btn" id="btn-show-accumulators" title="Dettaglio Accumulatori">Î£<span
+                        class="tool-label">Mostra
+                        accum.</span></button>
+                <button class="tool-btn" id="btn-show-coverage" title="Dettaglio Copertura">ð<span
+                        class="tool-label">Mostra
+                        copertura</span></button>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" title="Aggiorna Dati">ð<span class="tool-label">Aggiorna</span></button>
+
+                <div class="tool-sep"></div>
+                <div class="tool-group">
+                    <button class="tool-btn" id="sort-dropdown-btn">
+                        ð<span class="tool-label">Ordinamento â¾</span>
+                    </button>
+                    <!-- Dropdown Content -->
+                    <div class="tool-dropdown-menu" id="sort-menu">
+                        <div class="tool-dropdown-item">ð¨ Mansione</div>
+                        <div class="tool-dropdown-item">ð¤ Nominativo</div>
+                        <div class="tool-dropdown-item">ð Turno</div>
+                    </div>
+                </div>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" id="btn-show-legend" title="Mostra Legenda">â¹ï¸<span
+                        class="tool-label">Legenda</span></button>
+                <button class="tool-btn" title="Stampa">ð¨ï¸<span class="tool-label">Stampa</span></button>
+                <button class="tool-btn" title="Export Excel">ð<span class="tool-label">Export</span></button>
+                <div class="tool-sep"></div>
+                <button class="tool-btn" title="Attiva Videata Presenti/Assenti">ð¥<span class="tool-label">Aprei
+                        Pres/Ass</span></button>
+                <button class="tool-btn" id="btn-assign-justify" title="Richiesta Giustificativo">âï¸<span
+                        class="tool-label">Apri
+                        Giustif.</span></button>
+            </div>
+
+            <!-- Navigation Tabs -->
+            <div class="month-tabs" id="month-tabs">
+                <!-- Javascript will populate months here -->
+            </div>
+
+            <!-- Main Grid Container -->
+            <main>
+                <div class="schedule-container" id="schedule-grid">
+                    <!-- Grid generated by JS -->
+                    <div class="grid-header" id="grid-header"></div>
+                    <div class="grid-body" id="grid-body"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Context Menu (hidden by default) -->
+    <div class="action-menu" id="context-menu" tabindex="-1">
+    </div>
+
+
+
+    <!-- Detail Modal -->
+    <div id="detail-modal" class="modal-overlay">
+        <div class="modal-window">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span class="modal-icon">ð¤</span> Programmazione mensile (P.P.M.) - dettaglio
+                </div>
+                <button class="modal-close" onclick="closeDetailModal()">â</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Nominativo</label>
+                    <input type="text" id="detail-name" readonly>
+                </div>
+                <div class="form-group">
+                    <label>Data</label>
+                    <input type="text" id="detail-date" readonly>
+                </div>
+                <div class="form-group">
+                    <label>Profilo</label>
+                    <input type="text" id="detail-profile" readonly>
+                </div>
+                <div class="form-group">
+                    <label>Profilo aggiuntivo</label>
+                    <input type="text" id="detail-add-profile" readonly>
+                </div>
+                <div class="form-group">
+                    <label>Giustificativi</label>
+                    <textarea id="detail-justification" rows="3" readonly class="bg-gray"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Richieste</label>
+                    <textarea id="detail-requests" rows="3" readonly class="bg-gray"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend Modal -->
+    <div id="legend-modal" class="modal-overlay">
+        <div class="modal-window" style="width: 350px;">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span class="modal-icon">ð¤</span> Legenda P.P.M.
+                </div>
+                <button class="modal-close" onclick="closeLegendModal()">â</button>
+            </div>
+            <div class="modal-body" style="font-size: 0.85rem; padding: 10px;">
+                <!-- Section 1 -->
+                <fieldset class="legend-group">
+                    <legend>Colori giorni mese</legend>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #FFFFE0;"></div> Festivita'
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #FFFF00;"></div> Domenica
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #40E0D0;"></div> Oggi
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #00FFFF;"></div> Giornata a consuntivo
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #00FF00;"></div> Assegnazione ad altro reparto
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #000000;"></div> Non assunto / Cessato
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #FFA500;"></div> Richiesta giustificativo in sospeso
+                    </div>
+                </fieldset>
+
+                <!-- Section 2 -->
+                <fieldset class="legend-group">
+                    <legend>Colori accumuli</legend>
+                    <div class="legend-item">
+                        <div class="l-box" style="background: #00FF00;"></div> Accumulo non disponibile
+                    </div>
+                </fieldset>
+
+                <!-- Section 3 -->
+                <fieldset class="legend-group">
+                    <legend>Simboli giorni mese</legend>
+                    <div class="legend-item">
+                        <div class="l-box l-border fw-bold">P</div> Profilo giornaliero modificato
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box l-border text-fuchsia">P<br>PZ</div> Profilo giornaliero con giustificativo
+                        d'assenza parziale
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box l-border text-red">G</div> Giustificativo d'assenza giornaliero
+                    </div>
+                </fieldset>
+
+                <!-- Section 4 -->
+                <fieldset class="legend-group">
+                    <legend>Colori copertura</legend>
+                    <div class="legend-item">
+                        <div class="l-box l-border text-red fw-bold">N</div> Non valida (difetto)
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box l-border text-red">N</div> Non valida (eccesso)
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box l-border">S</div> Valida
+                    </div>
+                    <div class="legend-item">
+                        <div class="l-box l-border fw-bold">P</div> Codice copertura modificato
+                    </div>
+                </fieldset>
+
+                <div style="text-align: center; margin-top: 10px;">
+                    <button onclick="closeLegendModal()" class="btn-primary">Chiudi</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Justification Modal -->
+    <div id="justification-modal" class="modal-overlay">
+        <div class="modal-window" style="width: 750px;">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span class="modal-icon">ð¤</span> SKYware v8.0.23.1123 - Programmazione mensile (P.P.M.)
+                </div>
+                <button class="modal-close" onclick="closeJustificationModal()">â</button>
+            </div>
+            <div class="modal-body" style="padding: 10px; background-color: #f0f0f0;">
+
+                <!-- Person List Section -->
+                <fieldset class="legend-group" style="background: white;">
+                    <legend>Elenco perso</legend>
+                    <div style="display: flex; gap: 10px; align-items: flex-start;">
+                        <div
+                            style="flex: 1; border: 1px solid #999; height: 80px; overflow-y: scroll; background: white; font-size: 0.85rem;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead style="background: #e0e0e0; position: sticky; top: 0;">
+                                    <tr>
+                                        <th style="width: 20px; border-right: 1px solid #ccc;">â¶</th>
+                                        <th style="border-right: 1px solid #ccc; text-align: left; padding-left: 5px;">
+                                            Matricola</th>
+                                        <th style="text-align: left; padding-left: 5px;">Nominativo</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="justify-emp-list">
+                                    <!-- Populated via JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                        <button class="btn-classic" disabled>Filtro personale</button>
+                    </div>
+                </fieldset>
+
+                <div style="display: flex; gap: 10px;">
+                    <!-- Period Section -->
+                    <fieldset class="legend-group" style="background: white; flex: 0 0 250px;">
+                        <legend>Period</legend>
+                        <div class="form-row">
+                            <label>Data iniziale</label>
+                            <input type="date" id="justify-start-date">
+                        </div>
+                        <div class="form-row">
+                            <label>Data finale</label>
+                            <input type="date" id="justify-end-date">
+                        </div>
+                        <div style="margin-top: 40px;">
+                            <label style="display: flex; align-items: center; gap: 5px;">
+                                <input type="checkbox"> Abilita selezione da calendario
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <!-- Data Gene Section -->
+                    <fieldset class="legend-group" style="background: white; flex: 1;">
+                        <legend>Dati gene</legend>
+                        <div class="form-row">
+                            <label>Causale</label>
+                            <select disabled style="background: #e0e0e0;">
+                                <option></option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Tipo giustificativo</label>
+                            <select id="justify-type" style="width: 100%;">
+                                <option>Assenza giornaliera - debito da profilo giornaliero</option>
+                                <option>Ferie</option>
+                                <option>Permesso Retribuito</option>
+                                <option>Malattia</option>
+                            </select>
+                        </div>
+                        <div class="form-row-multi">
+                            <div class="f-col">
+                                <label>Ora iniziale</label>
+                                <input type="time" value="00:00">
+                            </div>
+                            <div class="f-col">
+                                <label>Ora finale</label>
+                                <input type="time" value="00:00">
+                            </div>
+                        </div>
+                        <div class="form-row-multi">
+                            <div class="f-col">
+                                <label>Debito gius.</label>
+                                <input type="time" value="00:00">
+                            </div>
+                            <div class="f-col" style="align-items: center; display: flex; padding-top: 20px;">
+                                <label style="display: flex; align-items: center; gap: 5px;">
+                                    ValiditÃ  copertura <input type="checkbox">
+                                </label>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <!-- Footer Buttons -->
+                <div
+                    style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px; border-top: 1px solid #ccc; padding-top: 10px;">
+                    <button class="btn-classic">
+                        < Indietro </button>
+                            <button class="btn-classic"> Assegna / Avanti > </button>
+                            <button class="btn-classic" onclick="closeJustificationModal()"> Chiudi </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Assign Profile Modal -->
+    <div id="profile-modal" class="modal-overlay">
+        <div class="modal-window" style="width: 600px;">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span class="modal-icon">ð¤</span> SKYware v8.0.23.1123 - Programmazione mensile (P.P.M.)
+                </div>
+                <button class="modal-close" onclick="closeProfileModal()">â</button>
+            </div>
+            <div class="modal-body" style="padding: 10px; background-color: #f0f0f0;">
+
+                <div style="display: flex; gap: 15px;">
+                    <!-- Date Selection (Mock Calendar) -->
+                    <fieldset class="legend-group" style="background: white; flex: 0 0 250px;">
+                        <legend>Selezione date</legend>
+                        <div class="calendar-wrapper">
+                            <div class="cal-header">
+                                <button class="cal-nav">â</button>
+                                <span class="cal-title fw-bold">gennaio 2026</span>
+                                <button class="cal-nav">â¶</button>
+                            </div>
+                            <div class="cal-grid-head">
+                                <span>lun</span><span>mar</span><span>mer</span><span>gio</span><span>ven</span><span>sab</span><span>dom</span>
+                            </div>
+                            <div class="cal-grid">
+                                <span class="cal-day other-month">29</span><span
+                                    class="cal-day other-month">30</span><span class="cal-day other-month">31</span>
+                                <span class="cal-day">1</span><span class="cal-day">2</span><span
+                                    class="cal-day">3</span><span class="cal-day red">4</span>
+                                <span class="cal-day">5</span><span class="cal-day red">6</span><span
+                                    class="cal-day">7</span><span class="cal-day">8</span><span
+                                    class="cal-day">9</span><span class="cal-day">10</span><span
+                                    class="cal-day red">11</span>
+                                <span class="cal-day">12</span><span class="cal-day cal-selected">13</span><span
+                                    class="cal-day">14</span><span class="cal-day">15</span><span
+                                    class="cal-day">16</span><span class="cal-day">17</span><span
+                                    class="cal-day red">18</span>
+                                <span class="cal-day">19</span><span class="cal-day">20</span><span
+                                    class="cal-day">21</span><span class="cal-day">22</span><span
+                                    class="cal-day">23</span><span class="cal-day">24</span><span
+                                    class="cal-day red">25</span>
+                                <span class="cal-day">26</span><span class="cal-day">27</span><span
+                                    class="cal-day">28</span><span class="cal-day">29</span><span
+                                    class="cal-day">30</span><span class="cal-day">31</span><span
+                                    class="cal-day other-month">1</span>
+                                <span class="cal-day other-month">2</span><span
+                                    class="cal-day other-month">3</span><span class="cal-day other-month">4</span><span
+                                    class="cal-day other-month">5</span><span class="cal-day other-month">6</span><span
+                                    class="cal-day other-month">7</span><span class="cal-day other-month">8</span>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- Profile Selection -->
+                    <fieldset class="legend-group"
+                        style="background: white; flex: 1; display: flex; flex-direction: column; gap: 10px;">
+                        <legend>Selezione profili</legend>
+
+                        <div class="form-row">
+                            <label>Profilo giornaliero :</label>
+                            <select style="width: 100%;">
+                                <option></option>
+                                <option>P - Presenza</option>
+                                <option>G - Giornata</option>
+                                <option>SW - Smart Working</option>
+                                <option>R - Riposo</option>
+                            </select>
+                        </div>
+
+                        <div class="form-row">
+                            <label>Profilo aggiuntivo :</label>
+                            <select style="width: 100%;">
+                                <option></option>
+                                <option>R - ReperibilitÃ </option>
+                                <option>S - Straordinario</option>
+                            </select>
+                        </div>
+
+                    </fieldset>
+                </div>
+
+                <!-- Footer Buttons -->
+                <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 25px;">
+                    <button class="btn-classic"> Assegna </button>
+                    <button class="btn-classic" onclick="closeProfileModal()"> Chiudi </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

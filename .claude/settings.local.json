@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:testing.skyline.bg.it)",
+      "Bash(curl:*)"
     ]
   }
 }
