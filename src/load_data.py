@@ -231,7 +231,15 @@ def _filter_loaded_data_for_departments(
             frame["employee_id"].astype(str).str.strip().isin(employee_ids)
         ].copy()
 
-    for key in ("locks", "locks_df", "locks_must", "locks_must_df", "locks_forbid", "locks_forbid_df"):
+    for key in (
+        "locks", "locks_df",
+        "locks_must", "locks_must_df",
+        "locks_forbid", "locks_forbid_df",
+        # State locks: filtro solo per employee_id (non hanno slot_id né reparto_id)
+        "locks_state", "locks_state_df",
+        "locks_state_must", "locks_state_must_df",
+        "locks_state_forbid", "locks_state_forbid_df",
+    ):
         frame = filtered.get(key)
         if frame is None:
             continue

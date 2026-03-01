@@ -637,6 +637,40 @@ def build_all(dfs: dict, cfg: dict) -> dict:
 
     bundle["preassignment_pairs"] = preassignment_pairs
 
+    # ── Lock su stato giornaliero ─────────────────────────────────────────────
+    # locks_state_pairs: lista di (emp_idx, day_idx, state_code, lock)
+    # dove lock = 1 (MUST_DO) oppure -1 (FORBIDDEN).
+    # Le righe fuori orizzonte (emp o data non in indice) vengono ignorate.
+    df_locks_state_must = _pick_frame(dfs, "locks_state_must", "locks_state_must_df")
+    df_locks_state_forbid = _pick_frame(dfs, "locks_state_forbid", "locks_state_forbid_df")
+
+    locks_state_pairs: list[tuple[int, int, str, int]] = []
+
+    for lock_df, lock_value in (
+        (df_locks_state_must, 1),
+        (df_locks_state_forbid, -1),
+    ):
+        if lock_df is None or lock_df.empty:
+            continue
+        if not {"employee_id", "date", "state_code"}.issubset(lock_df.columns):
+            continue
+        work = lock_df.copy()
+        work["employee_id"] = work["employee_id"].astype(str).str.strip()
+        work["state_code"] = work["state_code"].astype(str).str.strip().str.upper()
+        dates_parsed = pd.to_datetime(work["date"], errors="coerce").dt.date
+        work = work.assign(_date=dates_parsed)
+        work = work.loc[work["_date"].notna()]
+        for employee_id, day_value, state_code in work[
+            ["employee_id", "_date", "state_code"]
+        ].itertuples(index=False):
+            emp_idx = eid_of.get(employee_id)
+            day_idx = did_of.get(day_value)
+            if emp_idx is None or day_idx is None:
+                continue
+            locks_state_pairs.append((emp_idx, day_idx, state_code, lock_value))
+
+    bundle["locks_state_pairs"] = locks_state_pairs
+
 
     # (3) Idoneita e coverage
 

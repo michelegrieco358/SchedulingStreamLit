@@ -46,7 +46,13 @@ from .gap_pairs import build_gap_pairs
 from .history import load_history
 from .leaves import apply_unplanned_leave_durations, load_leaves
 from .preassignments import load_preassignments
-from .locks import load_locks, split_locks, validate_locks
+from .locks import (
+    load_locks,
+    split_locks,
+    split_state_locks,
+    validate_locks,
+    validate_state_locks,
+)
 from .shifts import (
     build_shift_slots,
     load_department_shift_map,
@@ -82,6 +88,9 @@ class LoadedData:
     locks_df: pd.DataFrame
     locks_must_df: pd.DataFrame
     locks_forbid_df: pd.DataFrame
+    locks_state_df: pd.DataFrame
+    locks_state_must_df: pd.DataFrame
+    locks_state_forbid_df: pd.DataFrame
     preassignments_df: pd.DataFrame
     flags: dict[str, Any]
 
@@ -244,7 +253,7 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
                 .reset_index(drop=True)
             )
 
-    locks_raw_df = load_locks(
+    locks_raw_df, state_locks_raw_df = load_locks(
         os.path.join(data_dir, "locks.csv"),
         shift_slots=shift_slots_df,
     )
@@ -261,6 +270,14 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
         cross_reparto_enabled=bool(cross_reparto_cfg),
     )
     locks_must_df, locks_forbid_df = split_locks(locks_df)
+
+    locks_state_df = validate_state_locks(
+        state_locks_raw_df,
+        employees_df,
+        state_codes,
+        absences_by_day=absences_by_day_df,
+    )
+    locks_state_must_df, locks_state_forbid_df = split_state_locks(locks_state_df)
     preassignments_df = load_preassignments(
         os.path.join(data_dir, "preassignments.csv"),
         employees_df,
@@ -296,6 +313,9 @@ def load_all(config_path: str, data_dir: str) -> LoadedData:
         locks_df=locks_df,
         locks_must_df=locks_must_df,
         locks_forbid_df=locks_forbid_df,
+        locks_state_df=locks_state_df,
+        locks_state_must_df=locks_state_must_df,
+        locks_state_forbid_df=locks_state_forbid_df,
         preassignments_df=preassignments_df,
         flags=absences_flags,
     )
@@ -314,5 +334,7 @@ __all__ = [
     "load_preassignments",
     "load_locks",
     "split_locks",
+    "split_state_locks",
     "validate_locks",
+    "validate_state_locks",
 ]

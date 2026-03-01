@@ -59,6 +59,8 @@ class ModelContext:
     history: pd.DataFrame
     locks_must: pd.DataFrame
     locks_forbid: pd.DataFrame
+    locks_state_must: pd.DataFrame
+    locks_state_forbid: pd.DataFrame
     gap_pairs: pd.DataFrame
     calendars: pd.DataFrame
     preassignments: pd.DataFrame
@@ -338,6 +340,7 @@ def build_model(
                         model.Add(state_var == 0)
 
     _apply_lock_constraints(context, model, assign_vars, bundle)
+    _apply_state_lock_constraints(model, state_vars, bundle)
     _add_cross_assignment_limits(context, model, assign_vars, bundle)
 
     hour_info = _add_hour_constraints(context, model, assign_vars, bundle)
@@ -1895,6 +1898,45 @@ def _apply_lock_constraints(
             var = assign_vars.get((emp_idx, slot_idx))
             if var is not None:
                 model.Add(var == 0)
+
+
+def _apply_state_lock_constraints(
+    model: cp_model.CpModel,
+    state_vars: Mapping[tuple[int, int, str], cp_model.IntVar],
+    bundle: Mapping[str, object],
+) -> None:
+    """Apply hard must/forbid lock constraints on state variables.
+
+    I lock su stato giornaliero sono letti da ``bundle["locks_state_pairs"]``,
+    una lista di tuple ``(emp_idx, day_idx, state_code, lock)`` dove
+    ``lock = 1`` (MUST_DO) oppure ``-1`` (FORBIDDEN).
+
+    MUST_DO  → ``state_vars[(emp_idx, day_idx, state_code)] == 1``
+    FORBIDDEN → ``state_vars[(emp_idx, day_idx, state_code)] == 0``
+
+    Le combinazioni fuori dall'insieme dei ``state_vars`` esistenti vengono
+    ignorate (es. state_code non presente nel modello per quella config).
+    I vincoli di accoppiamento stato-slot già presenti nel modello propagano
+    automaticamente: forzare uno stato di domanda a 1 implica che almeno uno
+    slot di quel tipo venga assegnato; forzarlo a 0 impedisce qualsiasi
+    assegnazione di slot di quel tipo quel giorno.
+    """
+
+    locks_state_pairs: list[tuple[int, int, str, int]] = bundle.get(  # type: ignore[assignment]
+        "locks_state_pairs", []
+    )
+    if not locks_state_pairs:
+        return
+
+    for emp_idx, day_idx, state_code, lock_value in locks_state_pairs:
+        var = state_vars.get((emp_idx, day_idx, state_code))
+        if var is None:
+            # state_code non presente nel modello per questa configurazione: ignorato.
+            continue
+        if lock_value == 1:
+            model.Add(var == 1)
+        else:
+            model.Add(var == 0)
 
 
 def _add_hour_constraints(
@@ -5399,6 +5441,8 @@ def build_context_from_data(data: Any, bundle: Mapping[str, object]) -> ModelCon
     history = _optional_frame(data, "history", "history_df")
     locks_must = _optional_frame(data, "locks_must", "locks_must_df")
     locks_forbid = _optional_frame(data, "locks_forbid", "locks_forbid_df")
+    locks_state_must = _optional_frame(data, "locks_state_must", "locks_state_must_df")
+    locks_state_forbid = _optional_frame(data, "locks_state_forbid", "locks_state_forbid_df")
     gap_pairs = _optional_frame(data, "gaps", "gap_pairs_df")
     calendars = _require_frame(data, "calendar", "calendars", "calendar_df")
     preassignments = _optional_frame(data, "preassignments", "preassignments_df")
@@ -5415,6 +5459,8 @@ def build_context_from_data(data: Any, bundle: Mapping[str, object]) -> ModelCon
         history=history,
         locks_must=locks_must,
         locks_forbid=locks_forbid,
+        locks_state_must=locks_state_must if locks_state_must is not None else pd.DataFrame(),
+        locks_state_forbid=locks_state_forbid if locks_state_forbid is not None else pd.DataFrame(),
         gap_pairs=gap_pairs,
         calendars=calendars,
         preassignments=preassignments if preassignments is not None else pd.DataFrame(),

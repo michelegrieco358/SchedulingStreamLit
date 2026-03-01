@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<style id="grid-css"></style>
+<style>
+.cell-selected {
+    outline: 3px solid #0a9ba6 !important;
+    outline-offset: -3px;
+    box-shadow: inset 0 0 0 2px rgba(10,155,166,0.35) !important;
+    position: relative;
+    z-index: 2;
+}
+td.ncell { cursor: pointer !important; }
+td.dc-cell { cursor: pointer !important; }
+td.dc-cell:hover, td.ncell:hover { filter: brightness(0.90) !important; }
+body { margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+#loading {
+    display: flex; align-items: center; justify-content: center;
+    height: 200px; color: #3a6a6e; font-size: 0.9rem;
+}
+</style>
+</head>
+<body>
+
+<div id="grid-root"><div id="loading">Caricamento griglia...</div></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   Streamlit Custom Component — vanilla JS, no build step.
+
+   Protocol:
+   1. On DOMContentLoaded → send componentReady
+   2. Wait for streamlit:render → inject grid HTML/CSS
+   3. On cell click → send setComponentValue
+   4. After render → send setFrameHeight
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Post message helper ──────────────────────────────────── */
+function sendMessageToStreamlitClient(type, data) {
+    window.parent.postMessage(
+        Object.assign({ isStreamlitMessage: true, type: type }, data || {}),
+        "*"
+    );
+}
+
+/* ─── State ────────────────────────────────────────────────── */
+var _ready = false;
+var _retryTimer = null;
+var _currentSelection = null;
+
+/* ─── Send componentReady (with retry until acknowledged) ─── */
+function _sendReady() {
+    if (_ready) return;
+    sendMessageToStreamlitClient("streamlit:componentReady", { apiVersion: 1 });
+    _retryTimer = setTimeout(_sendReady, 250);
+}
+
+/* ─── Listen for render events from Streamlit ──────────────── */
+window.addEventListener("message", function onMessage(event) {
+    var data = event.data;
+    if (!data || data.type !== "streamlit:render") return;
+
+    /* Streamlit acknowledged us */
+    _ready = true;
+    if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+
+    var args = data.args || {};
+    var gridHtml = args.grid_html || "";
+    var gridCss  = args.grid_css  || "";
+    var selected = args.selected  || {};
+
+    /* Inject CSS */
+    document.getElementById("grid-css").textContent = gridCss;
+
+    /* Render grid */
+    document.getElementById("grid-root").innerHTML = gridHtml;
+
+    /* Restore selection highlight from Python */
+    if (selected && selected.sel_type) {
+        _currentSelection = selected;
+    }
+    _applyHighlight();
+
+    /* Attach click handlers */
+    _attachHandlers();
+
+    /* Report content height to Streamlit */
+    requestAnimationFrame(function() {
+        var h = document.body.scrollHeight;
+        sendMessageToStreamlitClient("streamlit:setFrameHeight", { height: h });
+    });
+});
+
+/* ─── Click handlers ───────────────────────────────────────── */
+function _attachHandlers() {
+    /* Name cells */
+    var names = document.querySelectorAll("td.ncell");
+    for (var i = 0; i < names.length; i++) {
+        names[i].addEventListener("click", function() {
+            var eid = this.getAttribute("data-eid");
+            if (!eid) return;
+            _currentSelection = { sel_type: "emp", sel_id: eid, sel_date: null };
+            _applyHighlight();
+            sendMessageToStreamlitClient("streamlit:setComponentValue",
+                { value: _currentSelection });
+        });
+    }
+    /* Day cells */
+    var days = document.querySelectorAll("td.dc-cell");
+    for (var j = 0; j < days.length; j++) {
+        days[j].addEventListener("click", function() {
+            var eid = this.getAttribute("data-eid");
+            var dt  = this.getAttribute("data-date");
+            if (!eid || !dt) return;
+            _currentSelection = { sel_type: "day", sel_id: eid, sel_date: dt };
+            _applyHighlight();
+            sendMessageToStreamlitClient("streamlit:setComponentValue",
+                { value: _currentSelection });
+        });
+    }
+}
+
+/* ─── Highlight current selection ──────────────────────────── */
+function _applyHighlight() {
+    var prev = document.querySelectorAll(".cell-selected");
+    for (var k = 0; k < prev.length; k++) prev[k].classList.remove("cell-selected");
+
+    if (!_currentSelection || !_currentSelection.sel_type) return;
+
+    var sel;
+    if (_currentSelection.sel_type === "emp") {
+        sel = document.querySelector('td.ncell[data-eid="' + _currentSelection.sel_id + '"]');
+    } else {
+        sel = document.querySelector(
+            'td.dc-cell[data-eid="' + _currentSelection.sel_id +
+            '"][data-date="' + _currentSelection.sel_date + '"]'
+        );
+    }
+    if (sel) sel.classList.add("cell-selected");
+}
+
+/* ─── Boot ─────────────────────────────────────────────────── */
+window.addEventListener("DOMContentLoaded", function() {
+    _sendReady();
+});
+</script>
+</body>
+</html>
