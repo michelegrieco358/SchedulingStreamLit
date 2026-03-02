@@ -131,6 +131,22 @@ def test_absence_forces_absence_state() -> None:
     assert solver.Value(artifacts.state_vars[(0, 0, "F")]) == 1
 
 
+def test_absence_pairs_from_bundle_take_precedence_over_leaves() -> None:
+    """Se bundle['absence_pairs'] è presente, il modello usa quello."""
+    leaves = pd.DataFrame(
+        {"employee_id": ["E1"], "date": [pd.Timestamp("2025-01-01")]}
+    )
+    context = _make_basic_context(leaves)
+    # Forza assenza sul giorno 2 invece che sul giorno 1 indicato in leaves.
+    context.bundle["absence_pairs"] = [(0, 1)]
+
+    artifacts = build_model(context)
+    solver = _solve_model(artifacts)
+
+    assert solver.Value(artifacts.state_vars[(0, 0, "F")]) == 0
+    assert solver.Value(artifacts.state_vars[(0, 1, "F")]) == 1
+
+
 def test_no_absence_forbids_absence_state() -> None:
     leaves = pd.DataFrame(columns=["employee_id", "date"])
     context = _make_basic_context(leaves)

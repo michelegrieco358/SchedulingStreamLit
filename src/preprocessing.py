@@ -275,6 +275,33 @@ def _build_absence_index(df: pd.DataFrame | None) -> pd.DataFrame | None:
     return filtered.reset_index(drop=True)
 
 
+def _build_absence_pairs(
+    absence_tbl: pd.DataFrame | None,
+    eid_of: Mapping[str, int],
+    did_of: Mapping[object, int],
+) -> list[tuple[int, int]]:
+    """Build canonical (emp_idx, day_idx) absence pairs from normalized table."""
+    if absence_tbl is None or absence_tbl.empty:
+        return []
+    if not {"employee_id", "slot_date"}.issubset(absence_tbl.columns):
+        return []
+
+    work = absence_tbl.loc[:, ["employee_id", "slot_date"]].copy()
+    work["employee_id"] = work["employee_id"].astype(str).str.strip()
+    work["_date"] = pd.to_datetime(work["slot_date"], errors="coerce").dt.date
+    work = work.loc[work["employee_id"].ne("") & work["_date"].notna()]
+
+    pairs: set[tuple[int, int]] = set()
+    for employee_id, day_value in work.loc[:, ["employee_id", "_date"]].itertuples(index=False):
+        emp_idx = eid_of.get(employee_id)
+        day_idx = did_of.get(day_value)
+        if emp_idx is None or day_idx is None:
+            continue
+        pairs.add((int(emp_idx), int(day_idx)))
+
+    return sorted(pairs)
+
+
 def _pick_frame(store: dict, *keys: str) -> pd.DataFrame | None:
     """Return the first non-None dataframe found in ``store`` for ``keys``."""
 
@@ -832,6 +859,7 @@ def build_all(dfs: dict, cfg: dict) -> dict:
         candidates = candidates[candidates["_forbid"] != "both"].drop(columns="_forbid")
 
     absence_tbl = _build_absence_index(df_abs)
+    bundle["absence_pairs"] = _build_absence_pairs(absence_tbl, eid_of, did_of)
     if absence_tbl is not None and not absence_tbl.empty:
         candidates = candidates.merge(
             absence_tbl,

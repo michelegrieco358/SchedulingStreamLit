@@ -198,3 +198,31 @@ def test_build_all_handles_nullable_can_work_night_without_futurewarning() -> No
     eligible_eids = bundle["eligible_eids"]
 
     assert eligible_eids[sid_of[1]] == [eid_of["E2"]]
+
+
+def test_build_all_exports_canonical_absence_pairs() -> None:
+    start = date(2025, 11, 1)
+    end = date(2025, 11, 2)
+    cfg = _make_cfg(start, end)
+    calendar_df = build_calendar(start, end)
+
+    leaves_days_df = pd.DataFrame(
+        {
+            "employee_id": ["E1", "E2"],
+            "data": [start.isoformat(), start.isoformat()],
+            "is_absent": [True, False],
+        }
+    )
+
+    dfs = {
+        "employees_df": _make_employees(),
+        "shift_slots_df": _make_slots(start.isoformat()),
+        "calendar_df": calendar_df,
+        "leaves_days_df": leaves_days_df,
+    }
+
+    bundle = build_all(dfs, cfg)
+    did_of = bundle["did_of"]
+    eid_of = bundle["eid_of"]
+
+    assert bundle["absence_pairs"] == [(eid_of["E1"], did_of[start])]

@@ -4,7 +4,7 @@ from datetime import date
 
 import pandas as pd
 
-from src.load_data import _filter_loaded_data_for_departments
+from src.load_data import _build_absences_alias, _filter_loaded_data_for_departments
 
 
 def test_filter_loaded_data_for_departments_filters_employees_slots_and_pools() -> None:
@@ -142,3 +142,39 @@ def test_filter_loaded_data_for_departments_filters_state_locks() -> None:
         assert result_eids == ["E_A"], (
             f"{key}: atteso ['E_A'], trovato {result_eids}"
         )
+
+
+def test_build_absences_alias_normalizes_single_kind_column_with_priority() -> None:
+    frame = pd.DataFrame(
+        {
+            "employee_id": ["E1", "E2", "E3", "E4"],
+            "date": ["2025-11-01", "2025-11-02", "2025-11-03", "2025-11-04"],
+            "kind": ["", "full_day", "", ""],
+            "tipo": ["half_day", "", "full-day", ""],
+            "tipo_set": ["legacy", "legacy2", "", "legacy4"],
+        }
+    )
+
+    alias = _build_absences_alias({"leaves_days_df": frame})
+
+    assert alias is not None
+    assert list(alias.columns) == ["employee_id", "date", "kind"]
+    assert alias.loc[alias["employee_id"] == "E1", "kind"].iloc[0] == "half_day"
+    assert alias.loc[alias["employee_id"] == "E2", "kind"].iloc[0] == "full_day"
+    assert alias.loc[alias["employee_id"] == "E3", "kind"].iloc[0] == "full-day"
+    assert alias.loc[alias["employee_id"] == "E4", "kind"].iloc[0] == "legacy4"
+
+
+def test_build_absences_alias_treats_pd_na_as_missing() -> None:
+    frame = pd.DataFrame(
+        {
+            "employee_id": ["E1"],
+            "date": ["2025-11-01"],
+            "kind": [pd.NA],
+        }
+    )
+
+    alias = _build_absences_alias({"leaves_days_df": frame})
+
+    assert alias is not None
+    assert alias.loc[0, "kind"] == "full_day"

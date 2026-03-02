@@ -7,6 +7,7 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+import pandas as pd
 import yaml
 
 from loader import LoadedData, LoaderError as _CoreLoaderError, load_all as _core_load_all
@@ -95,10 +96,30 @@ def _build_absences_alias(data: Mapping[str, Any]):
         if frame is None or getattr(frame, "empty", False):
             continue
         if {"employee_id", "date"}.issubset(frame.columns):
-            alias = frame.loc[:, [col for col in frame.columns if col in {"employee_id", "date", "kind", "tipo", "tipo_set"}]].copy()
-            alias = alias.rename(columns={"tipo": "kind", "tipo_set": "kind"})
-            if "kind" not in alias.columns:
+            alias = frame.loc[
+                :,
+                [col for col in frame.columns if col in {"employee_id", "date", "kind", "tipo", "tipo_set"}],
+            ].copy()
+
+            # Normalize to a single target column with explicit priority:
+            # kind > tipo > tipo_set > default full_day.
+            kind_series: Any = None
+            for source in ("kind", "tipo", "tipo_set"):
+                if source not in alias.columns:
+                    continue
+                # Keep missing values as missing (do not coerce pd.NA to "<NA>" string).
+                series = alias[source].astype("string").str.strip()
+                series = series.mask(series.eq(""), pd.NA)
+                if kind_series is None:
+                    kind_series = series
+                else:
+                    kind_series = kind_series.fillna(series)
+
+            if kind_series is None:
                 alias["kind"] = "full_day"
+            else:
+                alias["kind"] = kind_series.fillna("full_day")
+            alias = alias.loc[:, ["employee_id", "date", "kind"]]
             return alias.drop_duplicates().reset_index(drop=True)
     return None
 

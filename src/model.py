@@ -201,7 +201,12 @@ def build_model(
     horizon_start_idx = did_of.get(horizon_start_date) if horizon_start_date is not None else None
 
     if absence_state is not None:
-        absence_pairs = _collect_absence_pairs(context.leaves, eid_of, did_of)
+        bundle_absence_pairs = _collect_absence_pairs_from_bundle(bundle)
+        if bundle_absence_pairs is not None:
+            absence_pairs = bundle_absence_pairs
+        else:
+            # Legacy fallback for callers that still pass only leaves in context.
+            absence_pairs = _collect_absence_pairs(context.leaves, eid_of, did_of)
         # F (o stato assenza configurato) e' consentito solo nei giorni marcati
         # come assenza. Per i giorni pre-orizzonte prevale lo storico.
         for emp_idx in range(num_employees):
@@ -613,6 +618,37 @@ def _collect_absence_pairs(
         day_idx = did_of.get(day)
         if emp_idx is not None and day_idx is not None:
             result.add((emp_idx, day_idx))
+    return result
+
+
+def _collect_absence_pairs_from_bundle(
+    bundle: Mapping[str, object],
+) -> set[tuple[int, int]] | None:
+    """Return absence pairs from bundle when available, else None."""
+    if "absence_pairs" not in bundle:
+        return None
+
+    raw = bundle.get("absence_pairs")
+    if raw is None:
+        return set()
+    if isinstance(raw, (str, bytes)):
+        return set()
+
+    result: set[tuple[int, int]] = set()
+    try:
+        iterator = iter(raw)  # type: ignore[arg-type]
+    except TypeError:
+        return set()
+
+    for item in iterator:
+        if not isinstance(item, (tuple, list)) or len(item) < 2:
+            continue
+        try:
+            emp_idx = int(item[0])
+            day_idx = int(item[1])
+        except (TypeError, ValueError):
+            continue
+        result.add((emp_idx, day_idx))
     return result
 
 

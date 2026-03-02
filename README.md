@@ -21,6 +21,19 @@ Prima di eseguire il loader assicurarsi di installare le dipendenze Python:
 pip install -r requirements.txt
 ```
 
+### Ambiente consigliato (OR-Tools)
+
+Per evitare incompatibilita API/runtime tra OR-Tools e Protobuf nei test/script:
+
+- `ortools==9.14.6206`
+- `protobuf==6.31.1`
+
+Verifica rapida:
+
+```bash
+python -c "import ortools, google.protobuf; print(ortools.__version__, google.protobuf.__version__)"
+```
+
 ## Utilizzo
 
 Per eseguire l'intero caricamento dati usando i file CSV forniti nella cartella
