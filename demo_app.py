@@ -224,6 +224,75 @@ def _merge_draft_pa(
     return pd.concat([draft_pa, outside], ignore_index=True)
 
 
+def _build_draft_kpi_data(result) -> dict:
+    """Estrae le metriche KPI da un SolveResult per la tab Analisi.
+
+    Restituisce un dizionario flat pronto per _render_kpi_tab.
+    Tollerante agli errori: se un campo non è disponibile viene omesso.
+    """
+    kpi: dict = {}
+
+    # ── Coverage under (ruolo e gruppo separati — semantica diversa) ─────
+    under_role = 0
+    if result.coverage_under_role_df is not None and not result.coverage_under_role_df.empty:
+        under_role = int(result.coverage_under_role_df["under_staff"].sum())
+    under_group = 0
+    if result.coverage_under_group_df is not None and not result.coverage_under_group_df.empty:
+        under_group = int(result.coverage_under_group_df["under_staff"].sum())
+    kpi["coverage_under_role"]  = under_role
+    kpi["coverage_under_group"] = under_group
+
+    # ── Obiettivo e gap dall'ottimo ───────────────────────────────────────
+    obj = result.objective_value
+    bound = result.best_objective_bound
+    kpi["objective_value"] = obj
+    kpi["best_bound"] = bound
+    if obj is not None and bound is not None and obj > 0:
+        kpi["gap_pct"] = max(0.0, (obj - bound) / obj * 100.0)
+    else:
+        kpi["gap_pct"] = None
+
+    # ── Breakdown per componente ──────────────────────────────────────────
+    bd = result.objective_breakdown
+    if bd is not None:
+        bd_map = {r.component: r for r in bd.rows}
+        r11  = bd_map.get("riposo_11h")
+        rw   = bd_map.get("riposo_settimanale")
+        rpa  = bd_map.get("preassegnazioni")
+        rcr  = bd_map.get("assegnazioni_cross")
+        kpi["violations_rest11"]      = int(r11.violations)  if r11  else 0
+        kpi["violations_rest_weekly"] = int(rw.violations)   if rw   else 0
+        kpi["violations_preass"]      = int(rpa.violations)  if rpa  else 0
+        kpi["n_cross_dept"]           = int(rcr.violations)  if rcr  else 0
+    else:
+        kpi["violations_rest11"]      = 0
+        kpi["violations_rest_weekly"] = 0
+        kpi["violations_preass"]      = 0
+        kpi["n_cross_dept"]           = 0
+
+    # ── Dipendenti pianificati ────────────────────────────────────────────
+    adf = result.assignments_df
+    if adf is not None and not adf.empty and "employee_id" in adf.columns:
+        kpi["n_employees_planned"] = int(adf["employee_id"].nunique())
+    else:
+        kpi["n_employees_planned"] = 0
+
+    # ── Saldo ore finale per dipendente (minuti → ore) ────────────────────
+    try:
+        balance_vars = getattr(result.artifacts, "final_hour_balance", {})
+        solver = result.solver
+        emp_of: dict = dict(result.bundle.get("emp_of", {}))
+        final_balance: dict[str, float] = {}
+        for (emp_idx, _), var in balance_vars.items():
+            eid = emp_of.get(emp_idx, str(emp_idx))
+            final_balance[str(eid)] = solver.Value(var) / 60.0
+        kpi["final_balance_by_emp"] = final_balance
+    except Exception:
+        kpi["final_balance_by_emp"] = {}
+
+    return kpi
+
+
 def prepare_run_folder(data: dict) -> Path:
     """Crea una cartella temporanea con tutti i CSV/YAML pronti per il loader.
 
@@ -357,9 +426,26 @@ def build_schedule(data: dict) -> tuple[list[date], list[dict]]:
 
 # ── HTML grid with <a id> links for click_detector ───────────────────────────
 
-def render_grid(dates: list[date], rows: list[dict]) -> str:
+def render_grid(
+    dates: list[date],
+    rows: list[dict],
+    consolidated_before: date | None = None,
+) -> str:
     """Build grid HTML. Highlight is handled client-side via JS so the HTML
-    stays identical across clicks and the iframe is never re-created."""
+    stays identical across clicks and the iframe is never re-created.
+
+    Args:
+        dates:               Lista di date da visualizzare.
+        rows:                Righe dello schedule (output di build_schedule).
+        consolidated_before: Prima data della finestra di ottimizzazione.
+                             I giorni strettamente precedenti vengono marcati
+                             come "consolidati" (visivamente attenuati).
+    """
+    # Pre-calcola l'insieme di date string consolidate per lookup O(1)
+    consolidated_ds: set[str] = set()
+    if consolidated_before is not None:
+        consolidated_ds = {str(d) for d in dates if d < consolidated_before}
+
     parts: list[str] = [
         f"<style>{GRID_CSS}",
         """
@@ -379,6 +465,8 @@ td.ncell:hover, td.dc-cell:hover { filter: brightness(0.90); cursor: pointer; }
 td.dc-cell.cell-locked .l1 { font-weight: 700; letter-spacing: 0.04em; }
 td.dc-cell.cell-locked { outline: 2px solid currentColor; outline-offset: -2px; }
 td.dc-cell.cell-pa .l1 { font-style: italic; opacity: 0.85; }
+th.col-consolidated { background-color: #dde8ea !important; opacity: 0.65; }
+td.dc-cell.col-consolidated { opacity: 0.50; }
 </style>""",
         '<div class="sched-container"><table class="sky-grid"><thead><tr>',
         '<th class="nhdr">Nominativo</th>',
@@ -386,8 +474,9 @@ td.dc-cell.cell-pa .l1 { font-style: italic; opacity: 0.85; }
 
     for d in dates:
         css = _hdr_class(d)
+        cons_cls = " col-consolidated" if str(d) in consolidated_ds else ""
         dl = DAY_LETTERS[d.weekday()]
-        parts.append(f'<th class="{css}"><span class="dn">{d.day}</span><span class="dl">{dl}</span></th>')
+        parts.append(f'<th class="{css}{cons_cls}"><span class="dn">{d.day}</span><span class="dl">{dl}</span></th>')
     parts.append("</tr></thead><tbody>")
 
     for row in rows:
@@ -409,8 +498,9 @@ td.dc-cell.cell-pa .l1 { font-style: italic; opacity: 0.85; }
                 extra_cls = " cell-pa"
             else:
                 extra_cls = ""
+            cons_cls = " col-consolidated" if ds in consolidated_ds else ""
             parts.append(
-                f'<td class="{css} dc-cell{extra_cls}">'
+                f'<td class="{css} dc-cell{extra_cls}{cons_cls}">'
                 f'<a href="#" id="day-{eid}-{d}">'
                 f'<div class="dc"><div class="l1">{code}</div>'
                 f'<div class="l2"></div><div class="l3"></div></div></a></td>'
@@ -1162,7 +1252,26 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
     date_str = payload["date"]
     if not date_str:
         return
+
+    # ── Rilevamento giorno consolidato (draft mode, data < calc_start) ────
+    _is_consolidated = False
+    _draft = st.session_state.get("draft")
+    if st.session_state.get("view_draft") and _draft:
+        _cs = _draft.get("calc_start")
+        if _cs:
+            try:
+                _is_consolidated = pd.Timestamp(date_str).date() < pd.Timestamp(_cs).date()
+            except Exception:
+                pass
+
     show_shift_detail(eid, date_str, app_data)
+
+    if _is_consolidated:
+        st.info(
+            "Giorno consolidato — fuori dalla finestra di ottimizzazione. "
+            "Visualizzazione in sola lettura."
+        )
+
     st.divider()
     shifts_df = app_data["shifts"]
 
@@ -1208,8 +1317,8 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
     if current in _forbidden_for_pa:
         current = "--"
     idx = shift_options.index(current) if current in shift_options else 0
-    selected = st.selectbox("Modifica preassegnazione", shift_options, index=idx)
-    if st.button("Salva", type="primary"):
+    selected = st.selectbox("Modifica preassegnazione", shift_options, index=idx, disabled=_is_consolidated)
+    if st.button("Salva", type="primary", disabled=_is_consolidated):
         df = app_data["preassignments"].copy()
         if not df.empty and "employee_id" in df.columns and "data" in df.columns:
             mask = (df["employee_id"].astype(str) == eid) & (df["data"] == date_str)
@@ -1263,11 +1372,12 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
         "Reparto", reparto_options,
         index=reparto_options.index(_def_rep) if _def_rep in reparto_options else 0,
         key="dlg_lock_reparto",
+        disabled=_is_consolidated,
     )
 
     must_options = ["-- nessuno --"] + all_lock_codes
     must_idx = must_options.index(must_shift) if must_shift in must_options else 0
-    must_sel = st.selectbox("Forza turno (MUST_DO)", must_options, index=must_idx, key="dlg_lock_must")
+    must_sel = st.selectbox("Forza turno (MUST_DO)", must_options, index=must_idx, key="dlg_lock_must", disabled=_is_consolidated)
 
     # Indicatore tipo di lock
     if must_sel != "-- nessuno --":
@@ -1283,9 +1393,10 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
     forbidden_sel = st.multiselect(
         "Vieta turni (FORBIDDEN)", forbidden_choices, default=forbidden_default,
         key="dlg_lock_forbidden",
+        disabled=_is_consolidated,
     )
 
-    if st.button("Salva lock", key="dlg_lock_save"):
+    if st.button("Salva lock", key="dlg_lock_save", disabled=_is_consolidated):
         # reparto_id vuoto → state lock; valorizzato → slot lock (se domanda)
         reparto_id_val = "" if reparto_sel == "-- qualsiasi --" else reparto_sel
         ldf = locks_df.copy() if not locks_df.empty else pd.DataFrame(
@@ -1376,6 +1487,155 @@ body{margin:0;font-family:'Inter',system-ui,sans-serif;}
 .sep{width:1px;height:26px;background:#c5e0e3;margin:0 4px;}
 .info{margin-left:auto;font-size:0.78rem;color:#3a6a6e;}
 </style>"""
+
+def _render_kpi_tab(draft: dict, data: dict) -> None:
+    """Renderizza la tab Analisi con le metriche KPI del solver."""
+    # ── Infeasibility: mostra diagnosi e interrompi ───────────────────────
+    # Precede il check su kpi: anche se kpi fosse vuoto (draft vecchio,
+    # errore di costruzione) le cause devono comunque essere visibili.
+    infeas = draft.get("infeasibility_summary")
+    if infeas:
+        st.error(
+            "Il solver non ha trovato nessuna soluzione ammissibile. "
+            "Di seguito le cause più probabili individuate dall'analisi euristica."
+        )
+        _SEV_ICON = {"error": "🔴", "warning": "🟡", "info": "ℹ️"}
+        causes = infeas.get("top_causes", [])
+        for i, cause in enumerate(causes):
+            icon  = _SEV_ICON.get(str(cause.get("severity", "info")), "ℹ️")
+            title = str(cause.get("title", f"Causa {i + 1}")).strip()
+            with st.expander(f"{icon} {title}", expanded=(i == 0)):
+                evidence = str(cause.get("evidence", "")).strip()
+                hint     = str(cause.get("hint", "")).strip()
+                if evidence:
+                    st.markdown(f"**Evidenza:** {evidence}")
+                if hint:
+                    st.markdown(f"**Suggerimento:** {hint}")
+        return
+
+    kpi = draft.get("kpi", {})
+    if not kpi:
+        st.info("Nessun dato KPI disponibile.")
+        return
+
+    emp_df = data.get("employees", pd.DataFrame())
+    n_total = len(emp_df)
+
+    # ── Riga 1: copertura + ottimo ────────────────────────────────────────
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(
+            "Scoperture ruolo",
+            kpi.get("coverage_under_role", 0),
+            help="Persone-slot mancanti rispetto al fabbisogno per ruolo specifico",
+        )
+    with col2:
+        st.metric(
+            "Scoperture gruppo",
+            kpi.get("coverage_under_group", 0),
+            help="Persone-slot mancanti rispetto al fabbisogno per gruppo di ruoli",
+        )
+    with col3:
+        gap = kpi.get("gap_pct")
+        st.metric(
+            "Gap dall'ottimo",
+            f"{gap:.1f}%" if gap is not None else "—",
+            help="(obiettivo − lower bound) / obiettivo × 100",
+        )
+    with col4:
+        n_plan = kpi.get("n_employees_planned", 0)
+        st.metric(
+            "Dipendenti pianificati",
+            f"{n_plan} / {n_total}",
+            help="Dipendenti con almeno un turno assegnato nella finestra",
+        )
+
+    st.divider()
+
+    # ── Riga 2: violazioni ────────────────────────────────────────────────
+    col5, col6, col7, col8 = st.columns(4)
+    with col5:
+        st.metric(
+            "Riposo 11h violato",
+            kpi.get("violations_rest11", 0),
+            help="Coppie di turni consecutivi con meno di 11h di riposo (soft)",
+        )
+    with col6:
+        st.metric(
+            "Riposo sett. violato",
+            kpi.get("violations_rest_weekly", 0),
+            help="Periodi di 7 giorni senza almeno un giorno di riposo (soft)",
+        )
+    with col7:
+        st.metric(
+            "Preassegn. violate",
+            kpi.get("violations_preass", 0),
+            help="Preassegnazioni non rispettate dal solver (soft)",
+        )
+    with col8:
+        st.metric(
+            "Turni cross-dept",
+            kpi.get("n_cross_dept", 0),
+            help="Turni assegnati a dipendenti fuori dal loro reparto principale (soft)",
+        )
+
+    # ── Saldo ore finale per dipendente ───────────────────────────────────
+    final_balance = kpi.get("final_balance_by_emp", {})
+    if final_balance:
+        st.divider()
+        st.markdown("**Saldo ore progressive per dipendente** *(post-ottimizzazione)*")
+        rows_disp = []
+        sum_abs_pre = 0.0
+        sum_abs_post = 0.0
+        for eid, bal_h in sorted(final_balance.items(), key=lambda x: str(x[0])):
+            name = eid
+            init_h = 0.0
+            if not emp_df.empty:
+                mask = emp_df["employee_id"].astype(str) == str(eid)
+                if mask.any():
+                    for _name_col in ("nome", "name"):
+                        if _name_col in emp_df.columns:
+                            _val = emp_df.loc[mask, _name_col]
+                            if not _val.empty and str(_val.iloc[0]).strip():
+                                name = str(_val.iloc[0])
+                                break
+                    if "saldo_prog_iniziale_h" in emp_df.columns:
+                        init_series = emp_df.loc[mask, "saldo_prog_iniziale_h"]
+                        if not init_series.empty:
+                            try:
+                                init_h = float(init_series.iloc[0])
+                            except (ValueError, TypeError):
+                                init_h = 0.0
+            sum_abs_pre += abs(init_h)
+            sum_abs_post += abs(bal_h)
+            rows_disp.append({
+                "Dipendente": name,
+                "Saldo iniziale (h)": f"{init_h:+.1f}",
+                "Saldo finale (h)": f"{bal_h:+.1f}",
+                "Δ (h)": f"{bal_h - init_h:+.1f}",
+            })
+
+        # Totale Σ|saldo| pre e post
+        _tc1, _tc2 = st.columns(2)
+        with _tc1:
+            st.metric(
+                "Σ |saldo| iniziale",
+                f"{sum_abs_pre:.1f} h",
+                help="Somma dei valori assoluti del saldo progressivo iniziale di ogni dipendente",
+            )
+        with _tc2:
+            delta_abs = sum_abs_post - sum_abs_pre
+            st.metric(
+                "Σ |saldo| finale",
+                f"{sum_abs_post:.1f} h",
+                delta=f"{delta_abs:+.1f} h",
+                delta_color="inverse",
+                help="Somma dei valori assoluti del saldo finale. Delta negativo = miglioramento",
+            )
+
+        if rows_disp:
+            st.dataframe(pd.DataFrame(rows_disp), use_container_width=True, hide_index=True)
+
 
 @st.fragment
 def _grid_section():
@@ -1492,95 +1752,125 @@ def _grid_section():
     n_emp  = len(filtered_rows)
     n_days = len(dates)
 
-    # ── 6. Toolbar ───────────────────────────────────────────────────────────
-    if sel_now and sel_now.get("sel_type") == "emp":
-        det_label, det_cls = "Dettaglio dipendente", "btn"
-    elif sel_now and sel_now.get("sel_type") == "day":
-        det_label, det_cls = "Dettaglio stato", "btn"
+    # ── 6-10. Piano / Analisi tabs ────────────────────────────────────────────
+    # La tab Analisi compare quando la bozza ha metriche KPI oppure una diagnosi
+    # di infeasibility: le due condizioni sono disgiunte per garantire che la
+    # diagnostica sia sempre visibile anche se kpi fosse vuoto.
+    _has_kpi = bool(
+        _view_draft and _draft and (
+            _draft.get("kpi") or _draft.get("infeasibility_summary")
+        )
+    )
+    if _has_kpi:
+        _tab_piano, _tab_analisi = st.tabs(["📅 Piano", "📊 Analisi"])
+        _piano_ctx = _tab_piano
     else:
-        det_label, det_cls = "Dettaglio", "btn off"
+        _piano_ctx = st.container()
 
-    filtri_cls   = "btn btn-active" if show_filters  else "btn"
-    show_cov_cls = "btn btn-active" if show_coverage else "btn"
+    with _piano_ctx:
+        # ── 6. Toolbar ───────────────────────────────────────────────────────
+        if sel_now and sel_now.get("sel_type") == "emp":
+            det_label, det_cls = "Dettaglio dipendente", "btn"
+        elif sel_now and sel_now.get("sel_type") == "day":
+            det_label, det_cls = "Dettaglio stato", "btn"
+        else:
+            det_label, det_cls = "Dettaglio", "btn off"
 
-    toolbar_html = (
-        _TB_CSS +
-        f'<div class="tb">'
-        f'<a id="{det_id}" href="#" class="{det_cls}">{det_label}</a>'
-        '<span class="sep"></span>'
-        f'<a id="{clear_id}" href="#" class="btn">&#128465; Svuota preassegnazioni</a>'
-        '<span class="sep"></span>'
-        '<span class="btn">&Sigma; Mostra accum.</span>'
-        f'<a id="{show_cov_id}" href="#" class="{show_cov_cls}">&#128202; Mostra copertura</a>'
-        '<span class="sep"></span>'
-        '<span class="btn">&#128260; Aggiorna</span>'
-        '<span class="sep"></span>'
-        '<span class="btn">&#128424; Stampa</span>'
-        '<span class="btn">&#128203; Export</span>'
-        '<span class="sep"></span>'
-        f'<a id="{filtri_id}" href="#" class="{filtri_cls}">&#9776; Filtri</a>'
-        f'<span class="info">{n_emp} dipendenti &middot; {n_days} giorni &middot; {month_label}</span>'
-        '</div>'
-    )
-    click_detector(toolbar_html, key="toolbar")
+        filtri_cls   = "btn btn-active" if show_filters  else "btn"
+        show_cov_cls = "btn btn-active" if show_coverage else "btn"
 
-    # ── 7. Filtri (se visibili) ─────────────────────────────────────────────
-    if show_filters:
-        fcol1, fcol2, fcol3, _ = st.columns([1, 1, 1, 3])
-        with fcol1:
-            st.selectbox("Reparto", ["Tutti"] + all_reparti, key="view_reparto")
-        with fcol2:
-            st.selectbox("Ruolo", ["Tutti"] + all_roles, key="view_role")
-        with fcol3:
-            emp_names = sorted(set(
-                r["name"] for r in all_rows
-                if (view_reparto == "Tutti" or r["reparto"] == view_reparto)
-                and (view_role == "Tutti" or r["role"] == view_role)
-            ))
-            st.selectbox("Dipendente", ["Tutti"] + emp_names, key="view_employee")
+        toolbar_html = (
+            _TB_CSS +
+            f'<div class="tb">'
+            f'<a id="{det_id}" href="#" class="{det_cls}">{det_label}</a>'
+            '<span class="sep"></span>'
+            f'<a id="{clear_id}" href="#" class="btn">&#128465; Svuota preassegnazioni</a>'
+            '<span class="sep"></span>'
+            '<span class="btn">&Sigma; Mostra accum.</span>'
+            f'<a id="{show_cov_id}" href="#" class="{show_cov_cls}">&#128202; Mostra copertura</a>'
+            '<span class="sep"></span>'
+            '<span class="btn">&#128260; Aggiorna</span>'
+            '<span class="sep"></span>'
+            '<span class="btn">&#128424; Stampa</span>'
+            '<span class="btn">&#128203; Export</span>'
+            '<span class="sep"></span>'
+            f'<a id="{filtri_id}" href="#" class="{filtri_cls}">&#9776; Filtri</a>'
+            f'<span class="info">{n_emp} dipendenti &middot; {n_days} giorni &middot; {month_label}</span>'
+            '</div>'
+        )
+        click_detector(toolbar_html, key="toolbar")
 
-    # ── 8. Griglia principale ────────────────────────────────────────────────
-    grid_html = render_grid(dates, filtered_rows)
-    click_detector(grid_html, key="grid")
+        # ── 7. Filtri (se visibili) ───────────────────────────────────────────
+        if show_filters:
+            fcol1, fcol2, fcol3, _ = st.columns([1, 1, 1, 3])
+            with fcol1:
+                st.selectbox("Reparto", ["Tutti"] + all_reparti, key="view_reparto")
+            with fcol2:
+                st.selectbox("Ruolo", ["Tutti"] + all_roles, key="view_role")
+            with fcol3:
+                emp_names = sorted(set(
+                    r["name"] for r in all_rows
+                    if (view_reparto == "Tutti" or r["reparto"] == view_reparto)
+                    and (view_role == "Tutti" or r["role"] == view_role)
+                ))
+                st.selectbox("Dipendente", ["Tutti"] + emp_names, key="view_employee")
 
-    # ── 9. Tabella copertura ──────────────────────────────────────────────────
-    # Sempre click_detector: quando il dialog copertura è aperto via pulsante,
-    # l'HTML non cambia (il pulsante non modifica contatore né selezione) →
-    # click_detector non re-emette "" → nessun re-run spurio → dialog stabile.
-    #
-    # assignments_df: se disponibile, viene usato per calcolare la copertura con
-    # il reparto effettivo di lavoro (gestisce cross-dept). In draft mode si
-    # prende dal draft; in normal mode da data (persistito al momento del salvataggio).
-    _cov_adf: pd.DataFrame | None = (
-        _draft.get("assignments_df") if (_view_draft and _draft) else data.get("assignments_df")
-    )
-    cov_data: dict = {}
-    if show_coverage:
-        st.markdown("**Copertura del fabbisogno**")
-        cov_data = compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
-        cov_html = render_coverage_grid(dates, all_reparti, cov_data, cov_click_counter, cov_selection)
-        click_detector(cov_html, key="coverage_grid")
-        # Pulsante contestuale: 1 clic seleziona la cella, pulsante apre il dialog
-        if cov_selection and _dialog_kind != "cov":
-            _cov_sel_rep, _cov_sel_ds = cov_selection
-            if st.button(
-                f"Dettaglio copertura: {_cov_sel_rep} · {_cov_sel_ds}",
-                key="cov_detail_btn",
-                type="secondary",
-            ):
-                st.session_state["_cov_dlg_req"] = cov_selection
-                st.rerun()
+        # ── 8. Griglia principale ─────────────────────────────────────────────
+        # In draft mode, i giorni prima di calc_start sono "consolidati" e
+        # vengono attenuati visivamente per distinguerli dalla finestra ottimizzata.
+        _consolidated_before: date | None = None
+        if _view_draft and _draft:
+            _cs = _draft.get("calc_start")
+            if _cs:
+                try:
+                    _consolidated_before = pd.Timestamp(_cs).date()
+                except Exception:
+                    pass
+        grid_html = render_grid(dates, filtered_rows, consolidated_before=_consolidated_before)
+        click_detector(grid_html, key="grid")
 
-    # ── 10. Apri dialog (SEMPRE per ultimo, una funzione per tipo) ──────────
-    # Funzioni diverse = componenti React indipendenti = no content bleed
-    if _dialog_kind == "emp":
-        _show_emp_dialog({"eid": _early_sel["sel_id"]}, data)
-    elif _dialog_kind == "day":
-        _show_day_dialog({"eid": _early_sel["sel_id"], "date": _early_sel.get("sel_date", "")}, data)
-    elif _dialog_kind == "cov":
-        _cov_rep, _cov_ds = open_cov_dialog
-        _cov_d = cov_data if cov_data else compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
-        _show_cov_dialog({"reparto": _cov_rep, "date": _cov_ds, "cov_data": _cov_d}, data)
+        # ── 9. Tabella copertura ───────────────────────────────────────────────
+        # Sempre click_detector: quando il dialog copertura è aperto via pulsante,
+        # l'HTML non cambia (il pulsante non modifica contatore né selezione) →
+        # click_detector non re-emette "" → nessun re-run spurio → dialog stabile.
+        #
+        # assignments_df: se disponibile, viene usato per calcolare la copertura con
+        # il reparto effettivo di lavoro (gestisce cross-dept). In draft mode si
+        # prende dal draft; in normal mode da data (persistito al momento del salvataggio).
+        _cov_adf: pd.DataFrame | None = (
+            _draft.get("assignments_df") if (_view_draft and _draft) else data.get("assignments_df")
+        )
+        cov_data: dict = {}
+        if show_coverage:
+            st.markdown("**Copertura del fabbisogno**")
+            cov_data = compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
+            cov_html = render_coverage_grid(dates, all_reparti, cov_data, cov_click_counter, cov_selection)
+            click_detector(cov_html, key="coverage_grid")
+            # Pulsante contestuale: 1 clic seleziona la cella, pulsante apre il dialog
+            if cov_selection and _dialog_kind != "cov":
+                _cov_sel_rep, _cov_sel_ds = cov_selection
+                if st.button(
+                    f"Dettaglio copertura: {_cov_sel_rep} · {_cov_sel_ds}",
+                    key="cov_detail_btn",
+                    type="secondary",
+                ):
+                    st.session_state["_cov_dlg_req"] = cov_selection
+                    st.rerun()
+
+        # ── 10. Apri dialog (SEMPRE per ultimo, una funzione per tipo) ─────────
+        # Funzioni diverse = componenti React indipendenti = no content bleed
+        if _dialog_kind == "emp":
+            _show_emp_dialog({"eid": _early_sel["sel_id"]}, data)
+        elif _dialog_kind == "day":
+            _show_day_dialog({"eid": _early_sel["sel_id"], "date": _early_sel.get("sel_date", "")}, data)
+        elif _dialog_kind == "cov":
+            _cov_rep, _cov_ds = open_cov_dialog
+            _cov_d = cov_data if cov_data else compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
+            _show_cov_dialog({"reparto": _cov_rep, "date": _cov_ds, "cov_data": _cov_d}, data)
+
+    if _has_kpi:
+        with _tab_analisi:
+            _render_kpi_tab(_draft, data)
 
 # ── Esecuzione solver (richiesta dal pulsante in sidebar) ────────────────────
 _ottimizza_req = st.session_state.pop("_ottimizza_req", None)
@@ -1629,12 +1919,14 @@ if _ottimizza_req:
             _draft_pa = pd.DataFrame(columns=["employee_id", "data", "state_code"])
 
         st.session_state["draft"] = {
-            "preassignments": _draft_pa,
-            "status_name":    _result.status_name,
-            "objective_value": _result.objective_value,
-            "calc_start":     _ottimizza_req["start"],
-            "calc_end":       _ottimizza_req["end"],
-            "assignments_df": _result.assignments_df.copy(),
+            "preassignments":        _draft_pa,
+            "status_name":           _result.status_name,
+            "objective_value":       _result.objective_value,
+            "calc_start":            _ottimizza_req["start"],
+            "calc_end":              _ottimizza_req["end"],
+            "assignments_df":        _result.assignments_df.copy(),
+            "kpi":                   _build_draft_kpi_data(_result),
+            "infeasibility_summary": _result.infeasibility_summary,
         }
         st.session_state["view_draft"] = True
 

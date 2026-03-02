@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+import warnings
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -91,6 +92,19 @@ def _to_dataframe_dict(loaded: LoadedData | Mapping[str, Any]) -> dict[str, Any]
 
 
 def _build_absences_alias(data: Mapping[str, Any]):
+    true_values = {"1", "true", "t", "yes", "y", "si", "sì"}
+
+    def _to_bool_mask(series: pd.Series) -> pd.Series:
+        def _coerce(value: object) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)) and not pd.isna(value):
+                return bool(int(value))
+            text = str(value).strip().lower()
+            return text in true_values
+
+        return series.map(_coerce).astype(bool)
+
     for key in ("absences", "leaves_df", "leaves_days_df"):
         frame = data.get(key)
         if frame is None or getattr(frame, "empty", False):
@@ -98,7 +112,11 @@ def _build_absences_alias(data: Mapping[str, Any]):
         if {"employee_id", "date"}.issubset(frame.columns):
             alias = frame.loc[
                 :,
-                [col for col in frame.columns if col in {"employee_id", "date", "kind", "tipo", "tipo_set"}],
+                [
+                    col
+                    for col in frame.columns
+                    if col in {"employee_id", "date", "kind", "tipo", "tipo_set", "is_absent"}
+                ],
             ].copy()
 
             # Normalize to a single target column with explicit priority:
@@ -116,7 +134,12 @@ def _build_absences_alias(data: Mapping[str, Any]):
                     kind_series = kind_series.fillna(series)
 
             if kind_series is None:
-                alias["kind"] = "full_day"
+                if "is_absent" in alias.columns:
+                    absent_mask = _to_bool_mask(alias["is_absent"])
+                    alias["kind"] = pd.Series(pd.NA, index=alias.index, dtype="string")
+                    alias.loc[absent_mask, "kind"] = "full_day"
+                else:
+                    alias["kind"] = "full_day"
             else:
                 alias["kind"] = kind_series.fillna("full_day")
             alias = alias.loc[:, ["employee_id", "date", "kind"]]
@@ -311,17 +334,44 @@ def load_context(
     active_selection = explicit_selection or cfg_selection
 
     if active_selection:
-        allowed = _normalize_departments(
+        cfg_allowed = _normalize_departments(
             cfg_dict.get("defaults", {}).get("departments")
             if isinstance(cfg_dict.get("defaults"), Mapping)
             else None
         )
-        unknown = sorted(set(active_selection) - set(allowed))
-        if unknown:
-            raise LoaderError(
-                "Reparti selezionati non presenti in defaults.departments: "
-                + ", ".join(unknown)
+        observed: set[str] = set()
+        for key in ("employees", "employees_df", "month_plan", "month_plan_df"):
+            frame = data.get(key)
+            if frame is None or "reparto_id" not in frame.columns:
+                continue
+            observed.update(
+                frame["reparto_id"].astype(str).str.strip().str.upper().replace({"": pd.NA}).dropna().unique().tolist()
             )
+
+        if cfg_allowed:
+            unknown = sorted(set(active_selection) - set(cfg_allowed))
+            if unknown:
+                observed_match = sorted(set(unknown) & observed)
+                still_unknown = sorted(set(unknown) - observed)
+                if observed_match:
+                    warnings.warn(
+                        "selected_departments contiene reparti non presenti in defaults.departments "
+                        f"ma osservati nel dataset: {', '.join(observed_match)}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                if still_unknown:
+                    raise LoaderError(
+                        "Reparti selezionati non presenti in defaults.departments né nei dati: "
+                        + ", ".join(still_unknown)
+                    )
+        else:
+            unknown = sorted(set(active_selection) - observed)
+            if unknown:
+                raise LoaderError(
+                    "Reparti selezionati non presenti nei dati caricati: "
+                    + ", ".join(unknown)
+                )
 
         data = _filter_loaded_data_for_departments(data, active_selection)
         cfg_dict = dict(cfg_dict)

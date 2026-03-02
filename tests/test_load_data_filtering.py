@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from datetime import date
+import warnings
 
 import pandas as pd
 
-from src.load_data import _build_absences_alias, _filter_loaded_data_for_departments
+import src.load_data as load_data_mod
+from src.load_data import (
+    _build_absences_alias,
+    _filter_loaded_data_for_departments,
+    load_context,
+)
 
 
 def test_filter_loaded_data_for_departments_filters_employees_slots_and_pools() -> None:
@@ -178,3 +184,59 @@ def test_build_absences_alias_treats_pd_na_as_missing() -> None:
 
     assert alias is not None
     assert alias.loc[0, "kind"] == "full_day"
+
+
+def test_build_absences_alias_uses_is_absent_fallback_when_type_missing() -> None:
+    frame = pd.DataFrame(
+        {
+            "employee_id": ["E1", "E2"],
+            "date": ["2025-11-01", "2025-11-01"],
+            "is_absent": [True, False],
+        }
+    )
+
+    alias = _build_absences_alias({"leaves_days_df": frame})
+
+    assert alias is not None
+    e1 = alias.loc[alias["employee_id"] == "E1", "kind"].iloc[0]
+    e2 = alias.loc[alias["employee_id"] == "E2", "kind"].iloc[0]
+    assert e1 == "full_day"
+    assert pd.isna(e2)
+
+
+def test_load_context_selected_departments_fallbacks_to_observed_data(monkeypatch) -> None:
+    data = {
+        "cfg": {"defaults": {}, "scheduling": {}},
+        "employees": pd.DataFrame({"employee_id": ["E1"], "reparto_id": ["REP_A"]}),
+        "employees_df": pd.DataFrame({"employee_id": ["E1"], "reparto_id": ["REP_A"]}),
+        "month_plan": pd.DataFrame({"reparto_id": ["REP_A"]}),
+        "month_plan_df": pd.DataFrame({"reparto_id": ["REP_A"]}),
+    }
+
+    monkeypatch.setattr(load_data_mod, "load_all_data", lambda *a, **k: data)
+    monkeypatch.setattr(load_data_mod, "_build_bundle", lambda d, c: {"ok": True})
+    monkeypatch.setattr(load_data_mod, "build_context_from_data", lambda d, b: object())
+
+    context, filtered_data, _bundle = load_context("dummy_cfg", "dummy_data", selected_departments=["REP_A"])
+    assert context is not None
+    assert filtered_data["cfg"]["scheduling"]["selected_departments"] == ["REP_A"]
+
+
+def test_load_context_warns_when_defaults_missing_but_dataset_contains_department(monkeypatch) -> None:
+    data = {
+        "cfg": {"defaults": {"departments": ["REP_X"]}, "scheduling": {}},
+        "employees": pd.DataFrame({"employee_id": ["E1"], "reparto_id": ["REP_A"]}),
+        "employees_df": pd.DataFrame({"employee_id": ["E1"], "reparto_id": ["REP_A"]}),
+        "month_plan": pd.DataFrame({"reparto_id": ["REP_A"]}),
+        "month_plan_df": pd.DataFrame({"reparto_id": ["REP_A"]}),
+    }
+
+    monkeypatch.setattr(load_data_mod, "load_all_data", lambda *a, **k: data)
+    monkeypatch.setattr(load_data_mod, "_build_bundle", lambda d, c: {"ok": True})
+    monkeypatch.setattr(load_data_mod, "build_context_from_data", lambda d, b: object())
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        load_context("dummy_cfg", "dummy_data", selected_departments=["REP_A"])
+
+    assert any("osservati nel dataset" in str(w.message) for w in captured)
