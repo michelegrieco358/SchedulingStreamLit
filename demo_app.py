@@ -138,6 +138,7 @@ def load_dataset(folder: Path) -> dict:
         raw_locks = pd.read_csv(locks_path, dtype=str).fillna("")
         if {"employee_id", "date", "reparto_id", "shift_code", "lock_type"}.issubset(raw_locks.columns):
             locks = raw_locks[_LOCK_COLS].copy()
+            locks["lock_type"] = locks["lock_type"].str.strip().str.upper()
         # formato slot_id (employee_id, slot_id, lock): richiede risoluzione non
         # disponibile nella demo → ignorato, i lock si gestiscono via UI
 
@@ -228,10 +229,11 @@ def prepare_run_folder(data: dict) -> Path:
 
     Copia i file statici dalla cartella originale del dataset e sovrascrive
     quelli che la UI può aver modificato in memoria:
-      - config.yaml     ← data["cfg"]
-      - employees.csv   ← data["employees"]
+      - employees.csv      ← data["employees"]
       - preassignments.csv ← data["preassignments"] (normalizzato)
-      - locks.csv       ← data["locks"] (se non vuoto)
+      - locks.csv          ← data["locks"] (se non vuoto)
+    Nota: config.yaml NON viene scritto qui — load_all_data riceve data["cfg"]
+    come dict in memoria e lo gestisce internamente.
 
     Crea holidays.csv vuoto se non presente nella cartella originale
     (il loader lo usa per la classificazione dei giorni festivi).
@@ -945,13 +947,20 @@ st.markdown(
 
 # ── Coverage preview ─────────────────────────────────────────────────────
 
-def compute_coverage_preview(data: dict, all_rows: list[dict]) -> dict:
+def compute_coverage_preview(
+    data: dict,
+    all_rows: list[dict],
+    assignments_df: pd.DataFrame | None = None,
+) -> dict:
     """Calcola per ogni (reparto, data) se il fabbisogno è soddisfatto.
 
     Ritorna dict {(reparto_id, date_str): {"status": "S"|"N", "details": [...]}}.
     Celle senza fabbisogno non compaiono nel dict.
-    La presenza è costruita da all_rows (piano effettivo da build_schedule,
-    che include gli override MUST_DO lock).
+
+    Se assignments_df è fornito (output del solver con colonne date/reparto_id/
+    shift_code/employee_id), la presenza viene costruita dal reparto effettivo
+    di lavoro — gestendo correttamente le assegnazioni cross-reparto.
+    Altrimenti si usa all_rows (reparto home dell'employee, fallback).
     """
     mp_df = data.get("month_plan", pd.DataFrame())
     cg_df = data.get("coverage_groups", pd.DataFrame())
@@ -979,19 +988,39 @@ def compute_coverage_preview(data: dict, all_rows: list[dict]) -> dict:
         cr_df["_role"] = cr_df[role_col].astype(str).str.strip().str.upper()
 
     # Presenza: {(date_str, reparto, shift): {role: count}}
-    # Costruita dal piano effettivo — include override MUST_DO rispetto ai preassignment raw
     presence: dict[tuple, dict] = {}
-    for row in all_rows:
-        reparto = row["reparto"].upper()
-        role = row["role"].upper()
-        if not reparto:
-            continue
-        for ds, state in row["days"].items():
-            if not state:
+    if assignments_df is not None and not assignments_df.empty:
+        # Percorso preciso: usa il reparto effettivo di lavoro dal solver output.
+        # Gestisce correttamente le assegnazioni cross-reparto.
+        _emp_df = data.get("employees", pd.DataFrame())
+        _emp_role: dict[str, str] = {}
+        if not _emp_df.empty and "role" in _emp_df.columns:
+            _emp_role = {
+                str(r["employee_id"]): str(r["role"]).strip().upper()
+                for _, r in _emp_df.iterrows()
+            }
+        for _, _ar in assignments_df.iterrows():
+            _ds  = str(pd.Timestamp(_ar["date"]).date())
+            _rep = str(_ar["reparto_id"]).strip().upper()
+            _sh  = str(_ar["shift_code"]).strip().upper()
+            _rol = _emp_role.get(str(_ar["employee_id"]), "")
+            _key = (_ds, _rep, _sh)
+            presence.setdefault(_key, {})
+            if _rol:
+                presence[_key][_rol] = presence[_key].get(_rol, 0) + 1
+    else:
+        # Fallback: piano da all_rows — usa reparto home (cross-dept non considerato)
+        for row in all_rows:
+            reparto = row["reparto"].upper()
+            role = row["role"].upper()
+            if not reparto:
                 continue
-            key = (ds, reparto, state.upper())
-            presence.setdefault(key, {})
-            presence[key][role] = presence[key].get(role, 0) + 1
+            for ds, state in row["days"].items():
+                if not state:
+                    continue
+                key = (ds, reparto, state.upper())
+                presence.setdefault(key, {})
+                presence[key][role] = presence[key].get(role, 0) + 1
 
     result: dict[tuple, dict] = {}
 
@@ -1518,10 +1547,17 @@ def _grid_section():
     # Sempre click_detector: quando il dialog copertura è aperto via pulsante,
     # l'HTML non cambia (il pulsante non modifica contatore né selezione) →
     # click_detector non re-emette "" → nessun re-run spurio → dialog stabile.
+    #
+    # assignments_df: se disponibile, viene usato per calcolare la copertura con
+    # il reparto effettivo di lavoro (gestisce cross-dept). In draft mode si
+    # prende dal draft; in normal mode da data (persistito al momento del salvataggio).
+    _cov_adf: pd.DataFrame | None = (
+        _draft.get("assignments_df") if (_view_draft and _draft) else data.get("assignments_df")
+    )
     cov_data: dict = {}
     if show_coverage:
         st.markdown("**Copertura del fabbisogno**")
-        cov_data = compute_coverage_preview(data, all_rows)
+        cov_data = compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
         cov_html = render_coverage_grid(dates, all_reparti, cov_data, cov_click_counter, cov_selection)
         click_detector(cov_html, key="coverage_grid")
         # Pulsante contestuale: 1 clic seleziona la cella, pulsante apre il dialog
@@ -1543,7 +1579,7 @@ def _grid_section():
         _show_day_dialog({"eid": _early_sel["sel_id"], "date": _early_sel.get("sel_date", "")}, data)
     elif _dialog_kind == "cov":
         _cov_rep, _cov_ds = open_cov_dialog
-        _cov_d = cov_data if cov_data else compute_coverage_preview(data, all_rows)
+        _cov_d = cov_data if cov_data else compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
         _show_cov_dialog({"reparto": _cov_rep, "date": _cov_ds, "cov_data": _cov_d}, data)
 
 # ── Esecuzione solver (richiesta dal pulsante in sidebar) ────────────────────
@@ -1596,8 +1632,9 @@ if _ottimizza_req:
             "preassignments": _draft_pa,
             "status_name":    _result.status_name,
             "objective_value": _result.objective_value,
-            "calc_start": _ottimizza_req["start"],
-            "calc_end":   _ottimizza_req["end"],
+            "calc_start":     _ottimizza_req["start"],
+            "calc_end":       _ottimizza_req["end"],
+            "assignments_df": _result.assignments_df.copy(),
         }
         st.session_state["view_draft"] = True
 
@@ -1657,6 +1694,12 @@ if _draft:
             else:
                 _final_pa = _draft["preassignments"].copy()
             st.session_state["data"]["preassignments"] = _final_pa
+            # Persisti assignments_df così la vista normale usa il reparto effettivo
+            _save_adf = _draft.get("assignments_df", pd.DataFrame())
+            if not _save_adf.empty:
+                st.session_state["data"]["assignments_df"] = _save_adf.copy()
+            else:
+                st.session_state["data"].pop("assignments_df", None)
             del st.session_state["draft"]
             st.session_state.pop("view_draft", None)
             st.rerun()
