@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 from datetime import date, timedelta
+import math
 from pathlib import Path
 import sys
 
@@ -310,12 +311,42 @@ def _render_detail_item(label: str, value: str) -> str:
     )
 
 
+# (colonna_csv, etichetta_italiana, tipo)  — pool_id escluso (nascosto)
+_EMP_ADVANCED_FIELDS: list[tuple[str, str, str]] = [
+    ("ore_dovute_mese_h",                  "Ore dovute al mese (h)",              "float"),
+    ("saldo_prog_iniziale_h",              "Saldo progressivo iniziale (h)",       "float"),
+    ("max_month_hours_h",                  "Max ore mensili (h)",                  "float"),
+    ("max_week_hours_h",                   "Max ore settimanali (h)",              "float"),
+    ("can_work_night",                     "Può lavorare di notte",               "bool"),
+    ("max_nights_week",                    "Max notti settimanali",                "int"),
+    ("max_nights_month",                   "Max notti mensili",                    "int"),
+    ("max_consecutive_nights",             "Max notti consecutive",               "int"),
+    ("saturday_count_ytd",                 "Sabati lavorati (anno in corso)",      "int"),
+    ("sunday_count_ytd",                   "Domeniche lavorate (anno in corso)",   "int"),
+    ("holiday_count_ytd",                  "Festività lavorate (anno in corso)",   "int"),
+    ("rest11h_max_monthly_exceptions",     "Max eccezioni riposo 11h mensili",     "int"),
+    ("rest11h_max_consecutive_exceptions", "Max eccezioni riposo 11h consecutive", "int"),
+    ("cross_max_shifts_month",             "Max turni cross-reparto mensili",      "int"),
+]
+
+
+def _is_empty_val(raw) -> bool:
+    """True se il valore è assente / NaN / stringa vuota."""
+    return (
+        raw is None
+        or (isinstance(raw, float) and math.isnan(raw))
+        or str(raw).strip() in ("", "nan", "None")
+    )
+
+
 def show_employee_detail(eid: str, emp_df: pd.DataFrame) -> None:
     matches = emp_df[emp_df["employee_id"].astype(str) == eid]
     if matches.empty:
         st.warning("Dipendente non trovato.")
         return
     emp = matches.iloc[0]
+
+    # ── Dati anagrafici (sola lettura) ────────────────────────────────────────
     items = "".join([
         _render_detail_item("Nome", str(emp.get("nome", eid))),
         _render_detail_item("Ruolo", str(emp.get("role", "--"))),
@@ -325,6 +356,76 @@ def show_employee_detail(eid: str, emp_df: pd.DataFrame) -> None:
         f'<div class="detail-panel"><div class="dp-grid">{items}</div></div>',
         unsafe_allow_html=True,
     )
+
+    # ── Impostazioni avanzate (modificabili) ──────────────────────────────────
+    available = [
+        (col, label, ftype)
+        for col, label, ftype in _EMP_ADVANCED_FIELDS
+        if col in emp_df.columns
+    ]
+    if not available:
+        return
+
+    with st.expander("Impostazioni avanzate"):
+        st.caption("Lascia i campi vuoti per usare il valore di default del solver.")
+        col_l, col_r = st.columns(2)
+        for i, (col, label, ftype) in enumerate(available):
+            raw = emp.get(col)
+            target = col_l if i % 2 == 0 else col_r
+            with target:
+                if ftype == "bool":
+                    if _is_empty_val(raw):
+                        idx = 0
+                    elif str(raw).lower() in ("true", "1"):
+                        idx = 1
+                    else:
+                        idx = 2
+                    st.selectbox(
+                        label,
+                        options=["(default)", "Sì", "No"],
+                        index=idx,
+                        key=f"emp_adv_{eid}_{col}",
+                    )
+                else:
+                    current = "" if _is_empty_val(raw) else str(raw)
+                    st.text_input(
+                        label,
+                        value=current,
+                        placeholder="default",
+                        key=f"emp_adv_{eid}_{col}",
+                    )
+
+        st.divider()
+        if st.button("Salva modifiche", key=f"emp_adv_{eid}_save", type="primary"):
+            df = st.session_state["data"]["employees"].copy()
+            mask = df["employee_id"].astype(str) == eid
+            errors: list[str] = []
+            for col, label, ftype in available:
+                widget_key = f"emp_adv_{eid}_{col}"
+                raw_val = st.session_state.get(widget_key, "")
+                if ftype == "bool":
+                    if raw_val == "Sì":
+                        parsed: object = True
+                    elif raw_val == "No":
+                        parsed = False
+                    else:
+                        parsed = float("nan")
+                else:
+                    raw_str = str(raw_val).strip()
+                    if raw_str == "":
+                        parsed = float("nan")
+                    else:
+                        try:
+                            parsed = int(raw_str) if ftype == "int" else float(raw_str)
+                        except ValueError:
+                            errors.append(f"'{label}': valore non valido '{raw_str}'")
+                            continue
+                df.loc[mask, col] = parsed
+            if errors:
+                st.error("Errori di formato:\n" + "\n".join(f"• {e}" for e in errors))
+            else:
+                st.session_state["data"]["employees"] = df
+                st.rerun()
 
 
 def show_shift_detail(eid: str, date_str: str, data: dict) -> None:
@@ -730,7 +831,7 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
     if current in _forbidden_for_pa:
         current = "--"
     idx = shift_options.index(current) if current in shift_options else 0
-    selected = st.selectbox("Modifica turno", shift_options, index=idx)
+    selected = st.selectbox("Modifica preassegnazione", shift_options, index=idx)
     if st.button("Salva", type="primary"):
         df = app_data["preassignments"].copy()
         if not df.empty and "employee_id" in df.columns and "data" in df.columns:
