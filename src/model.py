@@ -5249,6 +5249,15 @@ def _iter_group_requirements(context: ModelContext, sid_of: Mapping[int, int]):
         return
 
     slots = context.slots.loc[:, ["slot_id", "coverage_code", "shift_code", "reparto_id"]].copy()
+    slot_date_col = next(
+        (col for col in ("date", "data", "data_dt", "slot_date") if col in context.slots.columns),
+        None,
+    )
+    if slot_date_col is not None:
+        slots["_join_date"] = pd.to_datetime(
+            context.slots[slot_date_col], errors="coerce"
+        ).dt.date
+
     for col in ("coverage_code", "shift_code", "reparto_id"):
         if col not in slots.columns:
             raise ValueError(f"slots DataFrame privo della colonna '{col}'.")
@@ -5259,6 +5268,16 @@ def _iter_group_requirements(context: ModelContext, sid_of: Mapping[int, int]):
         if col not in groups.columns:
             raise ValueError(f"coverage_totals deve contenere la colonna '{col}'.")
         groups[col] = groups[col].astype(str).str.strip().str.upper()
+
+    group_date_col = next(
+        (col for col in ("date", "data", "data_dt", "slot_date") if col in groups.columns),
+        None,
+    )
+    join_on = ["coverage_code", "shift_code", "reparto_id"]
+    if group_date_col is not None and "_join_date" in slots.columns:
+        groups["_join_date"] = pd.to_datetime(groups[group_date_col], errors="coerce").dt.date
+        # Use date in join to avoid many-to-many matches across different days.
+        join_on.append("_join_date")
 
     need_col = "total_staff" if "total_staff" in groups.columns else ("min" if "min" in groups.columns else None)
     if need_col is None:
@@ -5275,7 +5294,7 @@ def _iter_group_requirements(context: ModelContext, sid_of: Mapping[int, int]):
 
     merged = groups.merge(
         slots,
-        on=["coverage_code", "shift_code", "reparto_id"],
+        on=join_on,
         how="left",
         validate="many_to_many",
         suffixes=("", "_slot"),
