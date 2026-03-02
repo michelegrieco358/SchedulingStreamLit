@@ -92,7 +92,7 @@ def test_state_must_lock_forces_state_to_one() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
     r_var = artifacts.state_vars[(0, 0, "R")]
     assert solver.Value(r_var) == 1, "MUST_DO deve forzare stato R a 1"
@@ -113,7 +113,7 @@ def test_state_must_lock_on_demand_shift_forces_slot_assignment() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
     m_state_var = artifacts.state_vars[(0, 0, "M")]
     slot_var = artifacts.assign_vars[(0, 0)]  # unico slot (idx=0)
@@ -133,7 +133,7 @@ def test_state_forbid_lock_blocks_state() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
     r_var = artifacts.state_vars[(0, 0, "R")]
     assert solver.Value(r_var) == 0, "FORBIDDEN deve forzare stato R a 0"
@@ -153,7 +153,7 @@ def test_state_forbid_lock_on_demand_shift_blocks_slot_assignment() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
     m_state_var = artifacts.state_vars[(0, 0, "M")]
     slot_var = artifacts.assign_vars[(0, 0)]
@@ -174,7 +174,7 @@ def test_state_lock_unknown_state_code_is_ignored() -> None:
 
     solver, status = _solve(artifacts.model)
     # Il modello deve rimanere fattibile nonostante il lock ignoto
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
 def test_state_lock_out_of_range_employee_idx_is_ignored() -> None:
@@ -183,7 +183,7 @@ def test_state_lock_out_of_range_employee_idx_is_ignored() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
 def test_state_lock_out_of_range_day_idx_is_ignored() -> None:
@@ -192,7 +192,7 @@ def test_state_lock_out_of_range_day_idx_is_ignored() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
 def test_no_state_locks_model_is_feasible() -> None:
@@ -201,7 +201,7 @@ def test_no_state_locks_model_is_feasible() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
 def test_multiple_forbid_on_different_states_still_feasible() -> None:
@@ -219,7 +219,7 @@ def test_multiple_forbid_on_different_states_still_feasible() -> None:
     artifacts = build_model(context)
 
     solver, status = _solve(artifacts.model)
-    assert solver.StatusName(status) in ("OPTIMAL", "FEASIBLE")
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
     # Il dipendente deve essere in R o F
     r_var = artifacts.state_vars[(0, 0, "R")]

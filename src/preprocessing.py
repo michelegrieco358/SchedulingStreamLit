@@ -5,6 +5,8 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
+from .absence_semantics import build_full_day_absence_mask
+
 
 def _ensure_date(value: date | pd.Timestamp | str) -> date:
     if isinstance(value, date) and not isinstance(value, pd.Timestamp):
@@ -258,16 +260,7 @@ def _build_absence_index(df: pd.DataFrame | None) -> pd.DataFrame | None:
     work["employee_id"] = work["employee_id"].astype(str).str.strip()
     work["slot_date"] = pd.to_datetime(work[date_col]).dt.date
 
-    mask = pd.Series(True, index=work.index)
-    if "kind" in work.columns:
-        kind_series = work["kind"].astype(str).str.strip().str.lower()
-        mask &= kind_series.isin({"full_day", "full-day", "full"})
-    elif "tipo" in work.columns:
-        tipo_series = work["tipo"].astype(str).str.strip().str.lower()
-        mask &= tipo_series.isin({"full_day", "full-day"})
-    elif "is_absent" in work.columns:
-        abs_series = work["is_absent"].astype(str).str.strip().str.lower()
-        mask &= abs_series.isin({"1", "true", "t", "yes", "y", "si"})
+    mask = build_full_day_absence_mask(work)
 
     filtered = work.loc[mask, ["employee_id", "slot_date"]].drop_duplicates()
     if filtered.empty:

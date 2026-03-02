@@ -24,6 +24,7 @@ COVERAGE_OBJECTIVE_SCALE = 1000
 
 import pandas as pd
 
+from .absence_semantics import build_full_day_absence_mask
 from .preprocessing import compute_adaptive_coefficients
 
 try:  # pragma: no cover - optional dependency guard
@@ -581,8 +582,11 @@ def _collect_absence_pairs(
     if date_series is not None:
         work = work.assign(_date=date_series)
     elif {"date_from", "date_to"}.issubset(work.columns):
+        source = work.loc[build_full_day_absence_mask(work)].copy()
+        if source.empty:
+            return set()
         records: list[tuple[str, object]] = []
-        for row in work.itertuples(index=False):
+        for row in source.itertuples(index=False):
             start = pd.to_datetime(getattr(row, "date_from"), errors="coerce")
             end = pd.to_datetime(getattr(row, "date_to"), errors="coerce")
             if pd.isna(start) or pd.isna(end):
@@ -603,12 +607,8 @@ def _collect_absence_pairs(
         return set()
 
     mask = work["_date"].notna()
-    if "is_absent" in work.columns:
-        mask &= work["is_absent"].astype(bool)
-    if "is_leave_day" in work.columns:
-        mask &= work["is_leave_day"].astype(bool)
-    if "is_in_horizon" in work.columns:
-        mask &= work["is_in_horizon"].astype(bool)
+    if date_series is not None:
+        mask &= build_full_day_absence_mask(work)
 
     filtered = work.loc[mask, ["employee_id", "_date"]].drop_duplicates()
 

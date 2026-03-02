@@ -97,6 +97,12 @@ grandezze da usare nei vincoli del solver:
 Gli stessi controlli sono replicati nello script `scripts/check_data.py`, in
 modo da intercettare eventuali override errati prima dell'esecuzione del loader.
 
+## Semantica assenze (vincoli hard)
+
+I vincoli hard di assenza nel modello usano solo assenze `full-day`
+(`full_day`, `full-day`, `full`). Eventuali record parziali non vengono
+tradotti in forzature giornaliere dello stato assenza.
+
 ## Pesi delle penalità
 
 Il file `config.yaml` espone una sezione unica `weights` con tutti i pesi delle
