@@ -41,10 +41,10 @@ defaults:
   absences:
     count_as_worked_hours: true
     full_day_hours_by_role_h:
-      INFERMIERE: 7.0
-      OSS: 7.0
-      MEDICO: 7.0
-      AMMINISTRATIVO: 7.0
+      infermiere: 7.0
+      oss: 7.0
+      medico: 7.0
+      amministrativo: 7.0
     fallback_contract_daily_avg_h: 7.0
   rest11h:
     max_monthly_exceptions: 2

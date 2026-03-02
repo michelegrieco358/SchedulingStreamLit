@@ -231,8 +231,17 @@ def resolve_lock(
 
     Restituisce lo slot_id corrispondente, o None se non trovato.
     """
+    date_col = next(
+        (c for c in ("data_dt", "date", "data") if c in shift_slots_df.columns),
+        None,
+    )
+    if date_col is None:
+        raise ValueError(
+            "resolve_lock: shift_slots_df non contiene nessuna colonna data "
+            "riconosciuta (attese: 'data_dt', 'date', 'data')"
+        )
     mask = (
-        (shift_slots_df["data_dt"] == pd.Timestamp(date))
+        (shift_slots_df[date_col] == pd.Timestamp(date))
         & (shift_slots_df["shift_code"] == shift_code)
         & (shift_slots_df["reparto_id"].str.strip().str.upper() == str(reparto_id).strip().upper())
     )

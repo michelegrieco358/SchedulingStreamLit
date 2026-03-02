@@ -57,8 +57,6 @@ def _coerce_optional_bool(series: pd.Series, default: bool) -> pd.Series:
             result.append(True)
         elif text in _FALSE_VALUES:
             result.append(False)
-        elif text == "":
-            result.append(default)
         else:
             result.append(default)
     return pd.Series(result, index=series.index, dtype=bool)

@@ -26,16 +26,12 @@ class GapLoggingCallback(cp_model.CpSolverSolutionCallback):
         objective = self.ObjectiveValue()
         bound = self.BestObjectiveBound()
 
-        if self._last_objective is not None and objective == self._last_objective:
+        if self._last_objective is not None and abs(objective - self._last_objective) < 1e-9:
             return
 
         self._last_objective = objective
-        if objective == bound:
-            gap = 0.0
-        elif objective != 0:
-            gap = abs(objective - bound) / abs(objective)
-        else:
-            gap = float("inf")
+        denom = max(1.0, abs(objective))
+        gap = abs(objective - bound) / denom
 
         print(
             f"Nuova soluzione: objective={objective:.6g}  bound={bound:.6g}  gap={gap:.4%}"

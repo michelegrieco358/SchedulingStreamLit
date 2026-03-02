@@ -69,7 +69,7 @@ def apply_slot_warm_start_hints(
         return WarmStartStats(rows_read=0)
 
     eid_of: Mapping[str, int] = bundle.get("eid_of", {})  # type: ignore[assignment]
-    sid_of: Mapping[int, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
+    sid_of: Mapping[object, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
 
     rows_read = int(len(warm_start_df))
     work = warm_start_df.loc[:, ["employee_id", "slot_id"]].copy()
@@ -100,7 +100,7 @@ def apply_slot_warm_start_hints(
                 )
             continue
 
-        slot_idx = sid_of.get(int(slot_id))
+        slot_idx = sid_of.get(slot_id)
         if slot_idx is None:
             unknown_slots += 1
             if strict:

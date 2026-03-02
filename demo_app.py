@@ -139,8 +139,51 @@ def load_dataset(folder: Path) -> dict:
         if {"employee_id", "date", "reparto_id", "shift_code", "lock_type"}.issubset(raw_locks.columns):
             locks = raw_locks[_LOCK_COLS].copy()
             locks["lock_type"] = locks["lock_type"].str.strip().str.upper()
-        # formato slot_id (employee_id, slot_id, lock): richiede risoluzione non
-        # disponibile nella demo → ignorato, i lock si gestiscono via UI
+        elif (
+            {"employee_id", "slot_id", "lock"}.issubset(raw_locks.columns)
+            and not raw_locks.empty
+            and not month_plan.empty
+            and {"data", "reparto_id", "shift_code"}.issubset(month_plan.columns)
+        ):
+            # Formato slot_id: risolvi slot_id → (date, reparto_id, shift_code)
+            # replicando la logica di build_shift_slots (sort + indice 1-based).
+            _mp = month_plan.copy()
+            _mp["_data_dt"] = pd.to_datetime(_mp["data"], errors="coerce")
+            _h = cfg.get("horizon", {})
+            _hs, _he = _h.get("start_date"), _h.get("end_date")
+            if _hs and _he:
+                _hs_t, _he_t = pd.Timestamp(_hs), pd.Timestamp(_he)
+                _mp = _mp[(_mp["_data_dt"] >= _hs_t) & (_mp["_data_dt"] <= _he_t)]
+            _sort = ["_data_dt", "reparto_id", "shift_code"]
+            if "coverage_code" in _mp.columns:
+                _sort.append("coverage_code")
+            _mp = _mp.sort_values(_sort).reset_index(drop=True)
+            _slot_map: dict[str, dict] = {}
+            for _i, _r in _mp.iterrows():
+                _slot_map[str(_i + 1)] = {
+                    "date": str(pd.Timestamp(_r["_data_dt"]).date()),
+                    "reparto_id": str(_r["reparto_id"]).strip(),
+                    "shift_code": str(_r["shift_code"]).strip(),
+                }
+            _LOCK_VAL = {"-1": "FORBIDDEN", "1": "MUST_DO"}
+            _resolved: list[dict] = []
+            for _, _lr in raw_locks.iterrows():
+                try:
+                    _sid = str(int(float(_lr["slot_id"])))
+                except (ValueError, TypeError):
+                    continue
+                _lt = _LOCK_VAL.get(str(_lr["lock"]).strip())
+                if _lt and _sid in _slot_map:
+                    _si = _slot_map[_sid]
+                    _resolved.append({
+                        "employee_id": str(_lr["employee_id"]).strip(),
+                        "date": _si["date"],
+                        "reparto_id": _si["reparto_id"],
+                        "shift_code": _si["shift_code"],
+                        "lock_type": _lt,
+                    })
+            if _resolved:
+                locks = pd.DataFrame(_resolved, columns=_LOCK_COLS)
 
     return {
         "cfg": cfg,
@@ -530,20 +573,7 @@ td.dc-cell.col-consolidated { opacity: 0.50; }
     return "".join(parts)
 
 
-def _parse_click_id(click_id: str) -> dict | None:
-    """Parse 'emp-42' or 'day-42-2024-07-15' into a selection dict."""
-    if not click_id:
-        return None
-    if click_id.startswith("emp-"):
-        return {"sel_type": "emp", "sel_id": click_id[4:], "sel_date": ""}
-    if click_id.startswith("day-"):
-        # day-{eid}-{YYYY-MM-DD}  →  split on first two dashes after 'day-'
-        rest = click_id[4:]  # e.g. "42-2024-07-15"
-        dash = rest.index("-")
-        eid = rest[:dash]
-        dt = rest[dash + 1:]
-        return {"sel_type": "day", "sel_id": eid, "sel_date": dt}
-    return None
+from demo.parsing import parse_click_id as _parse_click_id  # noqa: E402
 
 
 # ── Detail panels ────────────────────────────────────────────────────────────
@@ -741,7 +771,7 @@ with st.sidebar:
         if custom_path:
             dataset_folder = Path(custom_path)
 
-    if st.button("Carica", type="primary", use_container_width=True):
+    if st.button("Carica", type="primary", width="stretch"):
         if dataset_folder and dataset_folder.exists():
             try:
                 st.session_state["data"] = load_dataset(dataset_folder)
@@ -921,7 +951,7 @@ with st.sidebar:
             # ── Applica ───────────────────────────────────────────────────────
             st.divider()
             if st.button("Applica configurazione", key="cfg_adv_apply",
-                         use_container_width=True):
+                         width="stretch"):
                 _c = copy.deepcopy(st.session_state["data"]["cfg"])
                 _c.setdefault("rest_rules", {})["min_between_shifts_h"] = (
                     st.session_state["cfg_rest_min_between_h"]
@@ -991,14 +1021,14 @@ with st.sidebar:
             st.button(
                 "ESEGUI OTTIMIZZAZIONE",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
             )
             st.caption("⚠️ Modulo solver non disponibile (dipendenze mancanti).")
         elif st.button(
             "ESEGUI OTTIMIZZAZIONE",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=bool(_date_error),
         ):
             # Pattern "request": imposta il flag e lascia che il main area
@@ -1634,7 +1664,7 @@ def _render_kpi_tab(draft: dict, data: dict) -> None:
             )
 
         if rows_disp:
-            st.dataframe(pd.DataFrame(rows_disp), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows_disp), width="stretch", hide_index=True)
 
 
 @st.fragment
@@ -1969,7 +1999,7 @@ if _draft:
         if st.button(
             "Salva bozza",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=not _feasible,
             help=None if _feasible else "Non salvabile: il solver non ha trovato una soluzione.",
         ):
@@ -1996,7 +2026,7 @@ if _draft:
             st.session_state.pop("view_draft", None)
             st.rerun()
     with _b4:
-        if st.button("Annulla", use_container_width=True):
+        if st.button("Annulla", width="stretch"):
             del st.session_state["draft"]
             st.session_state.pop("view_draft", None)
             st.rerun()

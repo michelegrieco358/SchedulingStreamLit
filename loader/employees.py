@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import warnings
 from typing import Any
@@ -282,7 +283,7 @@ def load_employees(
                         "Valore non valido per absence_full_day_hours_h per dipendente "
                         f"{employee_id}: {row[absence_idx]}"
                     ) from exc
-                if override_value != override_value or override_value < 0:
+                if math.isnan(override_value) or override_value < 0:
                     raise LoaderError(
                         "Valore non valido per absence_full_day_hours_h per dipendente "
                         f"{employee_id}: {row[absence_idx]}"

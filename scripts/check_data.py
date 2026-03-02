@@ -151,10 +151,17 @@ def _check_employees(
     base_required = {
         "employee_id",
         "nome",
-        "ruolo",
         "ore_dovute_mese_h",
         "saldo_prog_iniziale_h",
     }
+    if "ruolo" in columns:
+        role_col = "ruolo"
+    elif "role" in columns:
+        role_col = "role"
+    else:
+        raise ValidationError(
+            f"{path.name}: colonne mancanti {{'ruolo' o 'role'}}"
+        )
     if "reparto" in columns:
         dept_col = "reparto"
     elif "reparto_id" in columns:
@@ -163,7 +170,12 @@ def _check_employees(
         raise ValidationError(
             f"{path.name}: colonne mancanti {{'reparto' o 'reparto_id'}}"
         )
-    _require_columns(columns, base_required | {dept_col}, path.name)
+    _require_columns(columns, base_required | {role_col, dept_col}, path.name)
+
+    # Normalizza la colonna ruolo a "ruolo" per coerenza interna
+    if role_col == "role":
+        for row in rows:
+            row["ruolo"] = row.pop("role")
 
     ids = [row["employee_id"] for row in rows]
     duplicates = [item for item, count in Counter(ids).items() if count > 1]
@@ -456,7 +468,9 @@ def _check_shift_role(
             f"{path.name}: colonne mancanti per shift_role_eligibility (attese 'ruolo' o 'role')"
         )
 
-    employee_roles = {row["ruolo"].strip().upper() for row in employees}
+    # "ruolo" è normalizzato da _check_employees; fallback a "role" per sicurezza
+    _emp_role_key = "ruolo" if (employees and "ruolo" in employees[0]) else "role"
+    employee_roles = {row[_emp_role_key].strip().upper() for row in employees}
     shift_ids = {row["shift_id"].strip().upper() for row in shifts}
 
     seen_pairs = set()

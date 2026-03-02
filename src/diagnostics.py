@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,15 @@ def _to_date(value: Any) -> date | None:
     if pd.isna(dt):
         return None
     return dt.date()
+
+
+def _safe_int(value: Any, label: str = "valore") -> int | None:
+    """Converte *value* in int, restituendo None (con log) se impossibile."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.debug("diagnostics: %s non convertibile a int: %r", label, value)
+        return None
 
 
 def _slot_day_map(context) -> dict[int, date]:
@@ -57,10 +69,13 @@ def _slot_duration_map(context) -> dict[int, int]:
     if "duration_min" not in slots.columns:
         return out
     for row in slots.loc[:, ["slot_id", "duration_min"]].itertuples(index=False):
+        slot_id = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if slot_id is None:
+            continue
         try:
-            slot_id = int(getattr(row, "slot_id"))
             duration = int(float(getattr(row, "duration_min")))
-        except Exception:
+        except (TypeError, ValueError):
+            logger.debug("diagnostics: duration_min non convertibile per slot %s", slot_id)
             continue
         out[slot_id] = max(duration, 0)
     return out
@@ -84,6 +99,7 @@ def _extract_cap_minutes(row: pd.Series, column: str) -> int | None:
     try:
         value = float(raw)
     except (TypeError, ValueError):
+        logger.debug("diagnostics: %s non convertibile a float: %r", column, raw)
         return None
     if value <= 0:
         return None
@@ -104,9 +120,8 @@ def _find_must_lock_day_conflicts(context) -> list[InfeasibilityCause]:
     keys: list[tuple[str, date]] = []
     for row in locks_must.loc[:, ["employee_id", "slot_id"]].itertuples(index=False):
         employee_id = str(getattr(row, "employee_id")).strip()
-        try:
-            slot_id = int(getattr(row, "slot_id"))
-        except Exception:
+        slot_id = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if slot_id is None:
             continue
         day = slot_day.get(slot_id)
         if not employee_id or day is None:
@@ -179,9 +194,8 @@ def _find_must_lock_leave_conflicts(context) -> list[InfeasibilityCause]:
     conflicts: list[tuple[str, date, int]] = []
     for row in locks_must.loc[:, ["employee_id", "slot_id"]].itertuples(index=False):
         eid = str(getattr(row, "employee_id")).strip()
-        try:
-            sid = int(getattr(row, "slot_id"))
-        except Exception:
+        sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if sid is None:
             continue
         day = slot_day.get(sid)
         if not eid or day is None:
@@ -217,9 +231,8 @@ def _find_must_forbid_pair_conflicts(context) -> list[InfeasibilityCause]:
     must_pairs: set[tuple[str, int]] = set()
     for row in locks_must.loc[:, ["employee_id", "slot_id"]].itertuples(index=False):
         eid = str(getattr(row, "employee_id")).strip()
-        try:
-            sid = int(getattr(row, "slot_id"))
-        except Exception:
+        sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if sid is None:
             continue
         if eid:
             must_pairs.add((eid, sid))
@@ -227,9 +240,8 @@ def _find_must_forbid_pair_conflicts(context) -> list[InfeasibilityCause]:
     forbid_pairs: set[tuple[str, int]] = set()
     for row in locks_forbid.loc[:, ["employee_id", "slot_id"]].itertuples(index=False):
         eid = str(getattr(row, "employee_id")).strip()
-        try:
-            sid = int(getattr(row, "slot_id"))
-        except Exception:
+        sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if sid is None:
             continue
         if eid:
             forbid_pairs.add((eid, sid))
@@ -273,9 +285,8 @@ def _find_must_lock_hour_cap_conflicts(context) -> list[InfeasibilityCause]:
 
     for row in locks_must.loc[:, ["employee_id", "slot_id"]].itertuples(index=False):
         employee_id = str(getattr(row, "employee_id")).strip()
-        try:
-            slot_id = int(getattr(row, "slot_id"))
-        except Exception:
+        slot_id = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if slot_id is None:
             continue
         day = slot_day.get(slot_id)
         duration = slot_duration.get(slot_id)
@@ -381,25 +392,22 @@ def _find_must_lock_night_eligibility_conflicts(context) -> list[InfeasibilityCa
     slot_night: dict[int, bool] = {}
     if "is_night" in slots.columns:
         for row in slots.loc[:, ["slot_id", "is_night"]].itertuples(index=False):
-            try:
-                sid = int(getattr(row, "slot_id"))
-            except Exception:
+            sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+            if sid is None:
                 continue
             slot_night[sid] = bool(getattr(row, "is_night"))
     if "shift_code" in slots.columns:
         for row in slots.loc[:, ["slot_id", "shift_code"]].itertuples(index=False):
-            try:
-                sid = int(getattr(row, "slot_id"))
-            except Exception:
+            sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+            if sid is None:
                 continue
             slot_night.setdefault(sid, str(getattr(row, "shift_code")).strip().upper() in night_codes)
 
     conflicts: list[tuple[str, int]] = []
     for row in locks_must.loc[:, ["employee_id", "slot_id"]].itertuples(index=False):
         eid = str(getattr(row, "employee_id")).strip()
-        try:
-            sid = int(getattr(row, "slot_id"))
-        except Exception:
+        sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if sid is None:
             continue
         if not eid:
             continue
@@ -453,6 +461,7 @@ def _extract_night_limit(
         try:
             parsed = int(round(float(raw)))
         except (TypeError, ValueError):
+            logger.debug("diagnostics: colonna %s non convertibile: %r", col, raw)
             continue
         return max(parsed, 0)
 
@@ -468,6 +477,7 @@ def _extract_night_limit(
                     try:
                         parsed = int(round(float(raw)))
                     except (TypeError, ValueError):
+                        logger.debug("diagnostics: config %s non convertibile: %r", key, raw)
                         continue
                     return max(parsed, 0)
         night_cfg = cfg.get("night")
@@ -479,6 +489,7 @@ def _extract_night_limit(
                 try:
                     parsed = int(round(float(raw)))
                 except (TypeError, ValueError):
+                    logger.debug("diagnostics: config %s non convertibile: %r", key, raw)
                     continue
                 return max(parsed, 0)
     return None
@@ -552,16 +563,14 @@ def _find_must_lock_night_limit_conflicts(context) -> list[InfeasibilityCause]:
     shift_map: dict[int, str] = {}
     if "shift_code" in slots.columns:
         for row in slots.loc[:, ["slot_id", "shift_code"]].itertuples(index=False):
-            try:
-                sid = int(getattr(row, "slot_id"))
-            except Exception:
+            sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+            if sid is None:
                 continue
             shift_map[sid] = str(getattr(row, "shift_code")).strip().upper()
     if "is_night" in slots.columns:
         for row in slots.loc[:, ["slot_id", "is_night"]].itertuples(index=False):
-            try:
-                sid = int(getattr(row, "slot_id"))
-            except Exception:
+            sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+            if sid is None:
                 continue
             slot_night[sid] = bool(getattr(row, "is_night"))
     for sid, shift_code in shift_map.items():
@@ -574,9 +583,8 @@ def _find_must_lock_night_limit_conflicts(context) -> list[InfeasibilityCause]:
     must_night_days_by_emp: dict[str, list[date]] = defaultdict(list)
     for row in locks_must.loc[:, ["employee_id", "slot_id"]].itertuples(index=False):
         eid = str(getattr(row, "employee_id")).strip()
-        try:
-            sid = int(getattr(row, "slot_id"))
-        except Exception:
+        sid = _safe_int(getattr(row, "slot_id"), "slot_id")
+        if sid is None:
             continue
         if not eid:
             continue

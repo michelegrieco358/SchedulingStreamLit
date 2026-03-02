@@ -143,8 +143,16 @@ def build_model(
     )
 
     bundle = context.bundle
+    _REQUIRED_BUNDLE_KEYS = ("eid_of", "sid_of", "did_of", "eligible_eids")
+    missing = [k for k in _REQUIRED_BUNDLE_KEYS if k not in bundle]
+    if missing:
+        raise ValueError(
+            f"build_model: il bundle di preprocessing è incompleto, "
+            f"chiavi mancanti: {missing}"
+        )
+
     eid_of: Mapping[str, int] = bundle["eid_of"]
-    sid_of: Mapping[int, int] = bundle["sid_of"]
+    sid_of: Mapping[object, int] = bundle["sid_of"]
     did_of: Mapping[object, int] = bundle["did_of"]
     eligible_eids: Mapping[int, Iterable[int]] = bundle["eligible_eids"]
 
@@ -1480,7 +1488,7 @@ def _extract_employee_night_params(
 def _build_slot_duration_minutes(
     context: ModelContext, bundle: Mapping[str, object]
 ) -> dict[int, int]:
-    sid_of: Mapping[int, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
+    sid_of: Mapping[object, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
     duration_map: dict[int, int] = {}
 
     raw_durations = bundle.get("slot_duration_min")
@@ -1884,7 +1892,7 @@ def _apply_lock_constraints(
         return
 
     eid_of: Mapping[str, int] = bundle.get("eid_of", {})  # type: ignore[assignment]
-    sid_of: Mapping[int, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
+    sid_of: Mapping[object, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
 
     if locks_must is not None and not locks_must.empty:
         must_df = locks_must.loc[:, ["employee_id", "slot_id"]].copy()
@@ -2366,6 +2374,7 @@ def _extract_start_balance_series(context: ModelContext) -> pd.Series:
     candidates = [
         "start_balance",
         "start_balance_h",
+        "saldo_prog_iniziale_h",
         "saldo_iniziale_h",
         "saldo_iniziale_ore",
         "saldo_iniziale",
@@ -4654,7 +4663,7 @@ def _add_history_boundary_violations(
     context: ModelContext,
     model: cp_model.CpModel,
     assign_vars: Dict[tuple[int, int], cp_model.IntVar],
-    sid_of: Mapping[int, int],
+    sid_of: Mapping[object, int],
     slot_date2: Mapping[int, int],
     eligible_sets: dict[int, set[int]],
     eid_of: Mapping[str, int],
@@ -4745,7 +4754,7 @@ def _add_rest_constraints(
     if rest_threshold <= 0:
         return result
 
-    sid_of: Mapping[int, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
+    sid_of: Mapping[object, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
     if not sid_of:
         return result
 
@@ -5253,7 +5262,7 @@ def _build_employee_role_map(employees: pd.DataFrame, bundle: Mapping[str, objec
     return mapping
 
 
-def _iter_role_requirements(context: ModelContext, sid_of: Mapping[int, int]):
+def _iter_role_requirements(context: ModelContext, sid_of: Mapping[object, int]):
     """Generatore che produce tuple (slot_idx, role_u, demand)."""
     req_df = context.slot_requirements
     if req_df.empty:
@@ -5279,7 +5288,7 @@ def _iter_role_requirements(context: ModelContext, sid_of: Mapping[int, int]):
         yield slot_idx, getattr(row, "role_u"), demand
 
 
-def _iter_group_requirements(context: ModelContext, sid_of: Mapping[int, int]):
+def _iter_group_requirements(context: ModelContext, sid_of: Mapping[object, int]):
     """Generatore che produce tuple (slot_idx, role_set, total_staff, cap)."""
     if context.coverage_totals.empty:
         return
@@ -5394,7 +5403,14 @@ def add_coverage_constraints(context: ModelContext, artifacts: ModelArtifacts) -
     x = artifacts.assign_vars
     bundle = context.bundle
 
-    sid_of: Mapping[int, int] = bundle["sid_of"]
+    for _req_key in ("sid_of", "eligible_eids"):
+        if _req_key not in bundle:
+            raise ValueError(
+                f"add_coverage_constraints: chiave obbligatoria '{_req_key}' "
+                f"mancante nel bundle"
+            )
+
+    sid_of: Mapping[object, int] = bundle["sid_of"]
     eligible_eids: Mapping[int, Iterable[int]] = bundle["eligible_eids"]
 
     emp_role_map = _build_employee_role_map(context.employees, bundle)

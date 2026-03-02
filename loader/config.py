@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import warnings
 from typing import Any
@@ -128,7 +129,7 @@ def load_config(path: str) -> dict[str, Any]:
             raise LoaderError(
                 "config: defaults.absences.full_day_hours_by_role_h deve contenere valori numerici ≥ 0"
             ) from exc
-        if parsed_value != parsed_value or parsed_value < 0:
+        if math.isnan(parsed_value) or parsed_value < 0:
             raise LoaderError(
                 "config: defaults.absences.full_day_hours_by_role_h deve contenere valori numerici ≥ 0"
             )
@@ -144,7 +145,7 @@ def load_config(path: str) -> dict[str, Any]:
             raise LoaderError(
                 "config: defaults.absences.fallback_contract_daily_avg_h deve essere un numero ≥ 0"
             ) from exc
-    if fallback_value != fallback_value or fallback_value < 0:
+    if math.isnan(fallback_value) or fallback_value < 0:
         raise LoaderError(
             "config: defaults.absences.fallback_contract_daily_avg_h deve essere un numero ≥ 0"
         )
