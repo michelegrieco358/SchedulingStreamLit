@@ -222,3 +222,79 @@ def test_coverage_dominance_uses_effective_objective_coefficients() -> None:
 
     assert role_coeff > pre_max_coeff
     assert group_coeff > role_coeff
+
+
+def test_group_requirements_join_respects_date_dimension() -> None:
+    """Il fabbisogno gruppo deve agganciarsi solo agli slot dello stesso giorno."""
+    employees = pd.DataFrame(
+        {
+            "employee_id": ["E1", "E2"],
+            "role": ["INFERMIERE", "INFERMIERE"],
+        }
+    )
+    slots = pd.DataFrame(
+        {
+            "slot_id": [1, 2],
+            "shift_code": ["M", "M"],
+            "coverage_code": ["COV", "COV"],
+            "reparto_id": ["REP1", "REP1"],
+            "date": [date(2025, 1, 1), date(2025, 1, 2)],
+        }
+    )
+    slot_requirements = pd.DataFrame(
+        {
+            "slot_id": [1, 2],
+            "role": ["INFERMIERE", "INFERMIERE"],
+            "demand": [0, 0],
+        }
+    )
+    coverage_totals = pd.DataFrame(
+        {
+            # Solo giorno 1: il giorno 2 non deve ricevere alcun vincolo gruppo.
+            "data": [date(2025, 1, 1)],
+            "coverage_code": ["COV"],
+            "shift_code": ["M"],
+            "reparto_id": ["REP1"],
+            "total_staff": [1],
+            "ruoli_totale": ["INFERMIERE"],
+        }
+    )
+    calendar = pd.DataFrame({"data": [pd.Timestamp("2025-01-01"), pd.Timestamp("2025-01-02")]})
+    empty = pd.DataFrame()
+
+    bundle = {
+        "eid_of": {"E1": 0, "E2": 1},
+        "emp_of": {0: "E1", 1: "E2"},
+        "sid_of": {1: 0, 2: 1},
+        "slot_of": {0: 1, 1: 2},
+        "did_of": {date(2025, 1, 1): 0, date(2025, 1, 2): 1},
+        "date_of": {0: date(2025, 1, 1), 1: date(2025, 1, 2)},
+        "num_employees": 2,
+        "num_slots": 2,
+        "num_days": 2,
+        "eligible_eids": {0: [0, 1], 1: [0, 1]},
+        "slot_date2": {0: 0, 1: 1},
+    }
+
+    context = ModelContext(
+        cfg={"weights": {"coverage_under_role": 1000.0, "coverage_under_group": 1200.0}},
+        employees=employees,
+        slots=slots,
+        coverage_roles=empty,
+        coverage_totals=coverage_totals,
+        slot_requirements=slot_requirements,
+        availability=empty,
+        leaves=empty,
+        history=empty,
+        locks_must=empty,
+        locks_forbid=empty,
+        gap_pairs=empty,
+        calendars=calendar,
+        preassignments=empty,
+        bundle=bundle,
+    )
+
+    artifacts = build_model(context)
+    add_coverage_constraints(context, artifacts)
+
+    assert set(artifacts.coverage_under_group.keys()) == {0}
