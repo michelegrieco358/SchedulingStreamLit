@@ -5,10 +5,13 @@ Replica dell'interfaccia SKYppm HTML.
 from __future__ import annotations
 
 import base64
+import copy
 from datetime import date, timedelta
 import math
 from pathlib import Path
+import shutil
 import sys
+import tempfile
 
 import pandas as pd
 import yaml
@@ -31,6 +34,14 @@ _LOGO_IMG = (
 )
 
 from demo.styles import inject_css, GRID_CSS
+
+# Solver opzionale: disponibile solo se le dipendenze (ortools ecc.) sono installate
+try:
+    from src.load_data import load_all_data as _load_all_data
+    from src.solve_service import solve_schedule_from_data as _solve
+    _SOLVER_AVAILABLE = True
+except Exception:
+    _SOLVER_AVAILABLE = False
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -141,6 +152,149 @@ def load_dataset(folder: Path) -> dict:
         "coverage_roles": coverage_roles,
         "folder": str(folder),
     }
+
+
+def _normalize_preassignments(pa_df: pd.DataFrame) -> pd.DataFrame:
+    """Normalizza il DataFrame preassegnazioni al formato atteso dal loader.
+
+    Colonne output: employee_id | data (YYYY-MM-DD) | state_code
+    Gestisce varianti di nomi colonna provenienti da CSV eterogenei.
+    """
+    if pa_df is None or pa_df.empty:
+        return pd.DataFrame(columns=["employee_id", "data", "state_code"])
+
+    out = pa_df.copy()
+
+    # Normalizza colonna data: accetta "data", "date", "day"
+    if "data" not in out.columns:
+        for alt in ("date", "day"):
+            if alt in out.columns:
+                out = out.rename(columns={alt: "data"})
+                break
+
+    # Normalizza colonna stato: accetta "state_code", "state", "turno", "shift_code"
+    if "state_code" not in out.columns:
+        for alt in ("state", "turno", "shift_code"):
+            if alt in out.columns:
+                out = out.rename(columns={alt: "state_code"})
+                break
+
+    # Tieni solo le colonne necessarie (ignora eventuali colonne extra)
+    keep = [c for c in ("employee_id", "data", "state_code") if c in out.columns]
+    out = out[keep].copy()
+
+    # Rimuovi righe senza stato assegnato (stato vuoto o "--")
+    if "state_code" in out.columns:
+        out = out[out["state_code"].notna() & (out["state_code"].astype(str).str.strip() != "")
+                  & (out["state_code"].astype(str).str.strip() != "--")]
+
+    return out.reset_index(drop=True)
+
+
+def _merge_draft_pa(
+    draft_pa: pd.DataFrame,
+    current_pa: pd.DataFrame,
+    win_start: str,
+    win_end: str,
+) -> pd.DataFrame:
+    """Unisce le preassegnazioni della bozza (giorni nella finestra di calcolo)
+    con quelle correnti (giorni fuori dalla finestra), preservando i dati
+    esistenti quando si ottimizza solo un periodo parziale.
+
+    Args:
+        draft_pa:   PA prodotte dal solver (colonne: employee_id, data, state_code)
+        current_pa: PA correnti in sessione (possibili varianti di colonne)
+        win_start:  primo giorno della finestra, es. "2025-07-01"
+        win_end:    ultimo giorno della finestra, es. "2025-07-15"
+    Returns:
+        DataFrame con colonne employee_id | data | state_code
+    """
+    _s = pd.Timestamp(win_start).date()
+    _e = pd.Timestamp(win_end).date()
+    win_dates: set[str] = {
+        str(_s + timedelta(days=i))
+        for i in range((_e - _s).days + 1)
+    }
+    norm_curr = _normalize_preassignments(current_pa)
+    if not norm_curr.empty and "data" in norm_curr.columns:
+        outside = norm_curr[~norm_curr["data"].astype(str).isin(win_dates)]
+    else:
+        outside = pd.DataFrame(columns=["employee_id", "data", "state_code"])
+    return pd.concat([draft_pa, outside], ignore_index=True)
+
+
+def prepare_run_folder(data: dict) -> Path:
+    """Crea una cartella temporanea con tutti i CSV/YAML pronti per il loader.
+
+    Copia i file statici dalla cartella originale del dataset e sovrascrive
+    quelli che la UI può aver modificato in memoria:
+      - config.yaml     ← data["cfg"]
+      - employees.csv   ← data["employees"]
+      - preassignments.csv ← data["preassignments"] (normalizzato)
+      - locks.csv       ← data["locks"] (se non vuoto)
+
+    Crea holidays.csv vuoto se non presente nella cartella originale
+    (il loader lo usa per la classificazione dei giorni festivi).
+
+    Returns:
+        Path alla cartella temporanea.
+        Il chiamante è responsabile di cancellarla dopo l'uso
+        (tipicamente con shutil.rmtree in un blocco finally).
+
+    Raises:
+        ValueError: se data["folder"] non è impostato o la cartella non esiste.
+        IOError: se la creazione del file temporaneo fallisce.
+    """
+    src = Path(data.get("folder", ""))
+    if not src.is_dir():
+        raise ValueError(f"Cartella dataset non valida: {src!r}")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="sky_run_"))
+    try:
+        # ── 1. Copia tutti i file statici dalla cartella originale ────────────
+        for f in src.iterdir():
+            if f.is_file():
+                shutil.copy2(f, tmp_dir / f.name)
+
+        # ── 2. employees.csv — sovrascrive con la working copy della UI ───────
+        # Nota: config.yaml NON viene scritto qui. load_all_data riceve data["cfg"]
+        # come dict in memoria e crea internamente il proprio file yaml temporaneo.
+        # Scrivere config.yaml nella run folder sarebbe una seconda fonte di config
+        # che il loader non legge mai, causando solo ambiguità in debug.
+        emp_df = data["employees"].copy()
+        emp_df.to_csv(tmp_dir / "employees.csv", index=False)
+
+        # ── 3. preassignments.csv — normalizzato e scritto sempre ─────────────
+        #    Se vuoto il loader lo ignora; scrivere il file garantisce che
+        #    eventuali preassegnazioni della sessione precedente non persistano.
+        pa_out = _normalize_preassignments(data.get("preassignments"))
+        pa_out.to_csv(tmp_dir / "preassignments.csv", index=False)
+
+        # ── 4. locks.csv — sovrascrive solo se ci sono lock attivi ───────────
+        locks_df = data.get("locks", pd.DataFrame())
+        if not locks_df.empty and "lock_type" in locks_df.columns:
+            # Formato state-based: employee_id, date, reparto_id, shift_code, lock_type
+            # Compatibile con il loader (formato simbolico)
+            locks_df.to_csv(tmp_dir / "locks.csv", index=False)
+        else:
+            # Nessun lock attivo: se esiste un lock.csv dalla copia, lo rimuoviamo
+            # per evitare di passare lock obsoleti al solver
+            stale = tmp_dir / "locks.csv"
+            if stale.exists():
+                stale.unlink()
+
+        # ── 5. holidays.csv — crea file vuoto se assente ─────────────────────
+        #    Il loader classifica i giorni festivi da questo file; se mancante
+        #    in alcuni dataset (July/August), lo creiamo vuoto con l'header.
+        hol_path = tmp_dir / "holidays.csv"
+        if not hol_path.exists():
+            pd.DataFrame(columns=["data", "descrizione"]).to_csv(hol_path, index=False)
+
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+    return tmp_dir
 
 
 def build_schedule(data: dict) -> tuple[list[date], list[dict]]:
@@ -548,22 +702,216 @@ with st.sidebar:
             help="Minimizza le modifiche rispetto alla programmazione esistente",
         )
 
+        # ── Impostazioni avanzate ─────────────────────────────────────────────
+        with st.expander("Impostazioni avanzate"):
+            _d    = cfg.get("defaults", {})
+            _rr   = cfg.get("rest_rules", {})
+            _n    = _d.get("night", {})
+            _r11  = _d.get("rest11h", {})
+            _ov   = _d.get("overstaffing", {})
+            _bal  = _d.get("balance", {})
+            _cr   = cfg.get("cross", {})
+            _rl   = cfg.get("roles", {})
+
+            # ── Vincoli di riposo ─────────────────────────────────────────────
+            st.markdown("**Vincoli di riposo**")
+            st.number_input(
+                "Riposo minimo tra turni (h)",
+                min_value=0.0, step=0.5,
+                value=float(_rr.get("min_between_shifts_h", 11)),
+                key="cfg_rest_min_between_h",
+            )
+            _ca, _cb = st.columns(2)
+            with _ca:
+                st.number_input(
+                    "Min gg riposo settimanale",
+                    min_value=0, step=1,
+                    value=int(_d.get("weekly_rest_min_days", 1)),
+                    key="cfg_weekly_rest_min_days",
+                )
+                st.number_input(
+                    "Max eccezioni 11h mensili",
+                    min_value=0, step=1,
+                    value=int(_r11.get("max_monthly_exceptions", 2)),
+                    key="cfg_rest11h_max_monthly",
+                )
+            with _cb:
+                st.number_input(
+                    "Min gg riposo bisettimanale",
+                    min_value=0, step=1,
+                    value=int(_d.get("biweekly_rest_min_days", 2)),
+                    key="cfg_biweekly_rest_min_days",
+                )
+                st.number_input(
+                    "Max eccezioni 11h consecutive",
+                    min_value=0, step=1,
+                    value=int(_r11.get("max_consecutive_exceptions", 1)),
+                    key="cfg_rest11h_max_consec",
+                )
+
+            # ── Notti ─────────────────────────────────────────────────────────
+            st.markdown("**Notti**")
+            _ca, _cb = st.columns(2)
+            with _ca:
+                st.number_input(
+                    "Max consecutive",
+                    min_value=0, step=1,
+                    value=int(_n.get("max_consecutive_nights", 3)),
+                    key="cfg_night_max_consec",
+                )
+                st.number_input(
+                    "Max/settimana",
+                    min_value=0, step=1,
+                    value=int(_n.get("max_per_week", 2)),
+                    key="cfg_night_max_week",
+                )
+            with _cb:
+                st.number_input(
+                    "Max/mese",
+                    min_value=0, step=1,
+                    value=int(_n.get("max_per_month", 8)),
+                    key="cfg_night_max_month",
+                )
+                st.checkbox(
+                    "Abilitate (default)",
+                    value=bool(_n.get("can_work_night", True)),
+                    key="cfg_night_can_work",
+                )
+            _ca, _cb = st.columns(2)
+            with _ca:
+                st.checkbox(
+                    "IP — notti abilitate",
+                    value=bool(_rl.get("IP", {}).get("can_work_night", True)),
+                    key="cfg_roles_IP_night",
+                )
+            with _cb:
+                st.checkbox(
+                    "OSS — notti abilitate",
+                    value=bool(_rl.get("OSS", {}).get("can_work_night", True)),
+                    key="cfg_roles_OSS_night",
+                )
+
+            # ── Bilancio ──────────────────────────────────────────────────────
+            st.markdown("**Bilancio**")
+            st.number_input(
+                "Max delta bilancio mensile (h)",
+                min_value=0.0, step=1.0,
+                value=float(_bal.get("max_balance_delta_month_h", 36)),
+                key="cfg_balance_max_delta",
+            )
+
+            # ── Overstaffing ──────────────────────────────────────────────────
+            st.markdown("**Overstaffing**")
+            _ca, _cb = st.columns(2)
+            with _ca:
+                st.checkbox(
+                    "Abilitato",
+                    value=bool(_ov.get("enabled", True)),
+                    key="cfg_overst_enabled",
+                )
+            with _cb:
+                st.number_input(
+                    "Cap per gruppo",
+                    min_value=0, step=1,
+                    value=int(_ov.get("group_cap_default", 1)),
+                    key="cfg_overst_cap",
+                )
+
+            # ── Cross-reparto ─────────────────────────────────────────────────
+            st.markdown("**Cross-reparto**")
+            st.number_input(
+                "Max turni cross-reparto/mese",
+                min_value=0, step=1,
+                value=int(_cr.get("max_shifts_month", 6)),
+                key="cfg_cross_max_shifts",
+            )
+
+            # ── Applica ───────────────────────────────────────────────────────
+            st.divider()
+            if st.button("Applica configurazione", key="cfg_adv_apply",
+                         use_container_width=True):
+                _c = copy.deepcopy(st.session_state["data"]["cfg"])
+                _c.setdefault("rest_rules", {})["min_between_shifts_h"] = (
+                    st.session_state["cfg_rest_min_between_h"]
+                )
+                _dd = _c.setdefault("defaults", {})
+                _dd["weekly_rest_min_days"]   = st.session_state["cfg_weekly_rest_min_days"]
+                _dd["biweekly_rest_min_days"] = st.session_state["cfg_biweekly_rest_min_days"]
+                _dd.setdefault("rest11h", {}).update({
+                    "max_monthly_exceptions":     st.session_state["cfg_rest11h_max_monthly"],
+                    "max_consecutive_exceptions": st.session_state["cfg_rest11h_max_consec"],
+                })
+                _dd.setdefault("night", {}).update({
+                    "max_consecutive_nights": st.session_state["cfg_night_max_consec"],
+                    "max_per_week":           st.session_state["cfg_night_max_week"],
+                    "max_per_month":          st.session_state["cfg_night_max_month"],
+                    "can_work_night":         st.session_state["cfg_night_can_work"],
+                })
+                _dd.setdefault("balance", {})["max_balance_delta_month_h"] = (
+                    st.session_state["cfg_balance_max_delta"]
+                )
+                _dd.setdefault("overstaffing", {}).update({
+                    "enabled":           st.session_state["cfg_overst_enabled"],
+                    "group_cap_default": st.session_state["cfg_overst_cap"],
+                })
+                _c.setdefault("cross", {})["max_shifts_month"] = (
+                    st.session_state["cfg_cross_max_shifts"]
+                )
+                _c.setdefault("roles", {}).setdefault("IP", {})["can_work_night"] = (
+                    st.session_state["cfg_roles_IP_night"]
+                )
+                _c.setdefault("roles", {}).setdefault("OSS", {})["can_work_night"] = (
+                    st.session_state["cfg_roles_OSS_night"]
+                )
+                st.session_state["data"]["cfg"] = _c
+                st.success("Configurazione aggiornata.")
+
         st.markdown("---")
 
         calc_time = st.radio("Tempo calcolo", list(TIME_PRESETS.keys()), index=1)
 
-        st.markdown("---")
-
-        st.button("ESEGUI OTTIMIZZAZIONE", type="primary", use_container_width=True)
-
+        # Salva parametri nel session state (disponibili anche al prossimo run)
         st.session_state["calc_params"] = {
             "reparti": calc_reparti,
-            "start": calc_start,
-            "end": calc_end,
+            "start": str(calc_start),
+            "end": str(calc_end),
             "cross": calc_cross,
             "time_s": TIME_PRESETS[calc_time],
             "stability": calc_stability,
         }
+
+        st.markdown("---")
+
+        # Validazione date prima di abilitare il pulsante
+        _date_error: str | None = None
+        if calc_start > calc_end:
+            _date_error = "La data di inizio è successiva alla data di fine."
+        elif calc_start < h_start or calc_end > h_end:
+            _date_error = (
+                f"Le date devono essere comprese nell'orizzonte del dataset "
+                f"({h_start} – {h_end})."
+            )
+
+        if _date_error:
+            st.caption(f"⚠️ {_date_error}")
+
+        if not _SOLVER_AVAILABLE:
+            st.button(
+                "ESEGUI OTTIMIZZAZIONE",
+                type="primary",
+                use_container_width=True,
+                disabled=True,
+            )
+            st.caption("⚠️ Modulo solver non disponibile (dipendenze mancanti).")
+        elif st.button(
+            "ESEGUI OTTIMIZZAZIONE",
+            type="primary",
+            use_container_width=True,
+            disabled=bool(_date_error),
+        ):
+            # Pattern "request": imposta il flag e lascia che il main area
+            # processi il run con lo spinner centrato nella pagina principale.
+            st.session_state["_ottimizza_req"] = dict(st.session_state["calc_params"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1079,7 +1427,28 @@ def _grid_section():
         _dialog_kind = "cov"
 
     # ── 5. Costruisci schedule (dopo eventuale clear) ────────────────────────
-    dates, all_rows = build_schedule(data)
+    # In vista bozza: per i giorni nella finestra di calcolo usiamo le PA del
+    # solver; per i giorni fuori finestra integriamo con le PA correnti così
+    # da non perdere i dati esistenti (ottimizzazione parziale).
+    _view_draft = st.session_state.get("view_draft", False)
+    _draft = st.session_state.get("draft")
+    if _view_draft and _draft:
+        _sched_data = dict(data)
+        _win_start = _draft.get("calc_start")
+        _win_end   = _draft.get("calc_end")
+        if _win_start and _win_end:
+            _merged_pa = _merge_draft_pa(
+                _draft["preassignments"],
+                data["preassignments"],
+                _win_start,
+                _win_end,
+            )
+        else:
+            _merged_pa = _draft["preassignments"]
+        _sched_data["preassignments"] = _merged_pa
+        dates, all_rows = build_schedule(_sched_data)
+    else:
+        dates, all_rows = build_schedule(data)
     all_roles     = sorted(emp_df["role"].dropna().unique().tolist())
     view_reparto  = st.session_state.get("view_reparto", "Tutti")
     view_role     = st.session_state.get("view_role", "Tutti")
@@ -1176,5 +1545,125 @@ def _grid_section():
         _cov_rep, _cov_ds = open_cov_dialog
         _cov_d = cov_data if cov_data else compute_coverage_preview(data, all_rows)
         _show_cov_dialog({"reparto": _cov_rep, "date": _cov_ds, "cov_data": _cov_d}, data)
+
+# ── Esecuzione solver (richiesta dal pulsante in sidebar) ────────────────────
+_ottimizza_req = st.session_state.pop("_ottimizza_req", None)
+if _ottimizza_req:
+    _run_error: str | None = None
+    _tmp_folder: Path | None = None
+    try:
+        # Copia profonda dei dati correnti per non toccare la sessione
+        _run_data = copy.deepcopy(st.session_state["data"])
+
+        # Applica le impostazioni della sidebar che non sono ancora nel cfg
+        _run_data["cfg"].setdefault("horizon", {}).update({
+            "start_date": _ottimizza_req["start"],
+            "end_date":   _ottimizza_req["end"],
+        })
+        _run_data["cfg"].setdefault("cross", {})["allow_cross"] = _ottimizza_req["cross"]
+
+        with st.spinner("Preparazione cartella di lavoro…"):
+            _tmp_folder = prepare_run_folder(_run_data)
+
+        with st.spinner("Caricamento e validazione dati…"):
+            _loaded = _load_all_data(_run_data["cfg"], _tmp_folder)
+
+        _max_s = float(_ottimizza_req["time_s"])
+        _preset_label = next(
+            (k for k, v in TIME_PRESETS.items() if v == int(_max_s)), f"{int(_max_s)}s"
+        )
+        with st.spinner(f"Ottimizzazione in corso… ({_preset_label})"):
+            _result = _solve(
+                _loaded,
+                _run_data["cfg"],
+                selected_departments=_ottimizza_req["reparti"] or None,
+                stability_enabled=_ottimizza_req["stability"],
+                max_time_s=_max_s,
+            )
+
+        # Converti states_df → formato preassegnazioni (employee_id, data, state_code)
+        if _result.states_df is not None and not _result.states_df.empty:
+            _draft_pa = (
+                _result.states_df
+                .rename(columns={"date": "data", "state": "state_code"})
+                [["employee_id", "data", "state_code"]]
+                .copy()
+            )
+        else:
+            _draft_pa = pd.DataFrame(columns=["employee_id", "data", "state_code"])
+
+        st.session_state["draft"] = {
+            "preassignments": _draft_pa,
+            "status_name":    _result.status_name,
+            "objective_value": _result.objective_value,
+            "calc_start": _ottimizza_req["start"],
+            "calc_end":   _ottimizza_req["end"],
+        }
+        st.session_state["view_draft"] = True
+
+    except Exception as _exc:
+        _run_error = str(_exc)
+    finally:
+        if _tmp_folder is not None and Path(_tmp_folder).exists():
+            shutil.rmtree(_tmp_folder, ignore_errors=True)
+
+    if _run_error:
+        st.error(f"Errore durante l'ottimizzazione: {_run_error}")
+    else:
+        st.rerun()
+
+# ── Banner bozza ──────────────────────────────────────────────────────────────
+_draft = st.session_state.get("draft")
+if _draft:
+    _view_draft = st.session_state.get("view_draft", False)
+    _feasible = _draft["status_name"] in ("OPTIMAL", "FEASIBLE")
+    _status_icon = "✅" if _feasible else "⚠️"
+    _obj_str = (
+        f" · obiettivo {_draft['objective_value']:.1f}"
+        if _draft["objective_value"] is not None else ""
+    )
+
+    _b1, _b2, _b3, _b4 = st.columns([3, 2, 1, 1])
+    with _b1:
+        st.info(f"{_status_icon} **Bozza disponibile** — {_draft['status_name']}{_obj_str}")
+    with _b2:
+        _radio_val = st.radio(
+            "Vista",
+            ["Piano corrente", "Bozza"],
+            index=1 if _view_draft else 0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="draft_view_radio",
+        )
+        st.session_state["view_draft"] = (_radio_val == "Bozza")
+    with _b3:
+        if st.button(
+            "Salva bozza",
+            type="primary",
+            use_container_width=True,
+            disabled=not _feasible,
+            help=None if _feasible else "Non salvabile: il solver non ha trovato una soluzione.",
+        ):
+            # Merge: bozza per i giorni ottimizzati + PA correnti per i giorni fuori finestra
+            _save_start = _draft.get("calc_start")
+            _save_end   = _draft.get("calc_end")
+            if _save_start and _save_end:
+                _final_pa = _merge_draft_pa(
+                    _draft["preassignments"],
+                    st.session_state["data"]["preassignments"],
+                    _save_start,
+                    _save_end,
+                )
+            else:
+                _final_pa = _draft["preassignments"].copy()
+            st.session_state["data"]["preassignments"] = _final_pa
+            del st.session_state["draft"]
+            st.session_state.pop("view_draft", None)
+            st.rerun()
+    with _b4:
+        if st.button("Annulla", use_container_width=True):
+            del st.session_state["draft"]
+            st.session_state.pop("view_draft", None)
+            st.rerun()
 
 _grid_section()

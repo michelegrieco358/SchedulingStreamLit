@@ -131,6 +131,19 @@ def test_absence_forces_absence_state() -> None:
     assert solver.Value(artifacts.state_vars[(0, 0, "F")]) == 1
 
 
+def test_no_absence_forbids_absence_state() -> None:
+    leaves = pd.DataFrame(columns=["employee_id", "date"])
+    context = _make_basic_context(leaves)
+    artifacts = build_model(context)
+
+    assert "F" in artifacts.state_codes
+    artifacts.model.Add(artifacts.state_vars[(0, 0, "F")] == 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(artifacts.model)
+    assert status == cp_model.INFEASIBLE
+
+
 def test_assignment_implies_matching_state() -> None:
     leaves = pd.DataFrame(columns=["employee_id", "date"])
     context = _make_basic_context(leaves)
@@ -498,6 +511,27 @@ def test_pre_horizon_state_defaults_to_rest_when_missing_in_history() -> None:
     solver = _solve_model(artifacts)
 
     assert solver.Value(artifacts.state_vars[(0, 0, "R")]) == 1
+
+
+def test_pre_horizon_requires_rest_state_r() -> None:
+    leaves = pd.DataFrame(columns=["employee_id", "date"])
+    context = _make_basic_context(
+        leaves,
+        calendar_dates=[pd.Timestamp("2025-01-01"), pd.Timestamp("2025-01-02")],
+        slots=pd.DataFrame(
+            {
+                "slot_id": [1],
+                "shift_code": ["M"],
+                "date": [pd.Timestamp("2025-01-02")],
+            }
+        ),
+        cfg_extra={
+            "horizon": {"start_date": "2025-01-02", "end_date": "2025-01-02"},
+            "state_codes": ["M", "P", "N", "G", "SN", "F"],
+        },
+    )
+    with pytest.raises(ValueError, match="manca lo stato di riposo 'R'"):
+        build_model(context)
 
 
 def test_pre_horizon_history_takes_precedence_over_leave() -> None:

@@ -386,7 +386,7 @@ def test_holiday_days_count_as_rest() -> None:
         day_idx = day_index[current_day]
         if current_day in holiday_days:
             model.Add(assign_vars[(0, slot_idx)] == 0)
-            model.Add(state_vars[(0, day_idx, "F")] == 1)
+            model.Add(state_vars[(0, day_idx, "R")] == 1)
         elif idx <= 6:
             model.Add(assign_vars[(0, slot_idx)] == 1)
             model.Add(state_vars[(0, day_idx, "M")] == 1)

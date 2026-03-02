@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import calendar
 import csv
 from collections import Counter, defaultdict
@@ -10,6 +9,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Sequence
+
+import yaml
 
 
 @dataclass
@@ -886,56 +887,22 @@ def _check_holidays(path: Path) -> tuple[list[dict[str, str]], DatasetSummary]:
     return rows, DatasetSummary(label=path.name, rows=len(rows))
 
 
-def _simple_yaml_load(text: str) -> dict:
-    root: dict = {}
-    stack: list[tuple[int, dict]] = [(0, root)]
+def _load_yaml_config(text: str) -> dict:
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValidationError(f"config: YAML non valido: {exc}") from exc
 
-    for raw_line in text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        key_value = line.strip()
-
-        while stack and indent < stack[-1][0]:
-            stack.pop()
-        if not stack:
-            raise ValidationError("config: indentazione non valida")
-
-        if key_value.endswith(":"):
-            key = key_value[:-1].strip()
-            new_dict: dict = {}
-            stack[-1][1][key] = new_dict
-            stack.append((indent + 2, new_dict))
-            continue
-
-        if ":" not in key_value:
-            raise ValidationError(f"config: linea non riconosciuta: {key_value}")
-
-        key, value = key_value.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if not stack:
-            raise ValidationError("config: struttura non valida")
-
-        if value == "":
-            new_dict = {}
-            stack[-1][1][key] = new_dict
-            stack.append((indent + 2, new_dict))
-            continue
-
-        try:
-            parsed_value = ast.literal_eval(value)
-        except Exception:
-            parsed_value = value
-        stack[-1][1][key] = parsed_value
-
-    return root
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValidationError("config: la radice YAML deve essere un dizionario")
+    return parsed
 
 
 def run_checks(config_path: Path, data_dir: Path) -> ValidationResult:
     with config_path.open("r", encoding="utf-8") as f:
-        cfg = _simple_yaml_load(f.read())
+        cfg = _load_yaml_config(f.read())
 
     try:
         horizon_cfg = cfg["horizon"]

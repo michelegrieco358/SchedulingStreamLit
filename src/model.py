@@ -59,12 +59,12 @@ class ModelContext:
     history: pd.DataFrame
     locks_must: pd.DataFrame
     locks_forbid: pd.DataFrame
-    locks_state_must: pd.DataFrame
-    locks_state_forbid: pd.DataFrame
     gap_pairs: pd.DataFrame
     calendars: pd.DataFrame
     preassignments: pd.DataFrame
     bundle: Mapping[str, object]
+    locks_state_must: pd.DataFrame = field(default_factory=pd.DataFrame)
+    locks_state_forbid: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def employees_for_slot(self, slot_id: int) -> Iterable[str]:
         """Restituisce gli employee_id candidati per lo slot indicato."""
@@ -202,12 +202,19 @@ def build_model(
 
     if absence_state is not None:
         absence_pairs = _collect_absence_pairs(context.leaves, eid_of, did_of)
-        for emp_idx, day_idx in absence_pairs:
-            if horizon_start_idx is not None and day_idx < horizon_start_idx:
-                continue  # storico ha la precedenza sui giorni pre-orizzonte
-            var = state_vars.get((emp_idx, day_idx, absence_state))
-            if var is not None:
-                model.Add(var == 1)
+        # F (o stato assenza configurato) e' consentito solo nei giorni marcati
+        # come assenza. Per i giorni pre-orizzonte prevale lo storico.
+        for emp_idx in range(num_employees):
+            for day_idx in range(num_days):
+                if horizon_start_idx is not None and day_idx < horizon_start_idx:
+                    continue  # storico ha la precedenza sui giorni pre-orizzonte
+                var = state_vars.get((emp_idx, day_idx, absence_state))
+                if var is None:
+                    continue
+                if (emp_idx, day_idx) in absence_pairs:
+                    model.Add(var == 1)
+                else:
+                    model.Add(var == 0)
 
     slot_date2 = bundle.get("slot_date2")
     if slot_date2 is None:
@@ -706,10 +713,10 @@ def _fix_pre_horizon_states(
 
     normalized_states = tuple(str(code).strip().upper() for code in state_codes if str(code).strip())
     state_set = set(normalized_states)
-    default_rest = "R" if "R" in state_set else ("F" if "F" in state_set else None)
+    default_rest = "R" if "R" in state_set else None
     if default_rest is None:
         raise ValueError(
-            "Impossibile fissare gli stati pre-orizzonte: manca uno stato di riposo ('R' o 'F')."
+            "Impossibile fissare gli stati pre-orizzonte: manca lo stato di riposo 'R'."
         )
 
     history = context.history
@@ -4591,6 +4598,22 @@ def _build_last_history_shift_end(
     return result
 
 
+def _normalize_ts_like(reference: pd.Timestamp, value: pd.Timestamp) -> pd.Timestamp:
+    """Normalize timestamp ``value`` to the timezone-naive/aware style of ``reference``."""
+
+    ref = pd.Timestamp(reference)
+    ts = pd.Timestamp(value)
+
+    if ref.tzinfo is None:
+        if ts.tzinfo is not None:
+            return ts.tz_localize(None)
+        return ts
+
+    if ts.tzinfo is None:
+        return ts.tz_localize(ref.tzinfo)
+    return ts.tz_convert(ref.tzinfo)
+
+
 def _add_history_boundary_violations(
     context: ModelContext,
     model: cp_model.CpModel,
@@ -4638,10 +4661,11 @@ def _add_history_boundary_violations(
         max_check_dt = last_end_ts + pd.Timedelta(hours=max(rest_threshold, 48))
 
         for slot_idx, slot_start_dt in slot_start_map.items():
-            if slot_start_dt > max_check_dt:
+            aligned_slot_start_dt = _normalize_ts_like(last_end_ts, slot_start_dt)
+            if aligned_slot_start_dt > max_check_dt:
                 continue
 
-            gap_hours = (slot_start_dt - last_end_ts).total_seconds() / 3600.0
+            gap_hours = (aligned_slot_start_dt - last_end_ts).total_seconds() / 3600.0
             if gap_hours >= rest_threshold - 1e-6:
                 continue
 

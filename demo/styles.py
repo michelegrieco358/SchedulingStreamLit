@@ -505,6 +505,50 @@ div[data-testid="stHorizontalBlock"].filter-row .stSelectbox label {
     padding-bottom: 6px;
 }
 
+/* ===== SIDEBAR EXPANDER (Impostazioni avanzate) ===== */
+/* Summary/header: semi-transparent bg, white text preserved */
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary {
+    background: rgba(255,255,255,0.12) !important;
+    border-radius: 8px !important;
+    padding: 10px 14px !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary:hover,
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary:focus,
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary:active {
+    background: rgba(255,255,255,0.22) !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary p,
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary span {
+    color: white !important;
+}
+
+/* Content area: trasparente (eredita gradiente sidebar), testo bianco ok */
+section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
+    background: transparent !important;
+    padding: 12px 4px 4px 4px !important;
+}
+/* Input fields: sfondo bianco con testo scuro */
+section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] input,
+section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] select {
+    color: #093d41 !important;
+    background: white !important;
+}
+
+/* "Applica configurazione" button inside expander */
+section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] .stButton > button {
+    background: #0a9ba6 !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] .stButton > button:hover {
+    background: #088590 !important;
+    color: white !important;
+}
+
 /* ===== DETAIL PANEL (below grid) ===== */
 .detail-panel {
     background: #fff;
