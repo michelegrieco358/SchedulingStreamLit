@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import copy
 from datetime import date, timedelta
+import html as _html
 import math
 from pathlib import Path
 import shutil
@@ -84,6 +85,8 @@ def _cell_class(code: str, d: date) -> str:
         return "bg-abs"
     if c == "N":
         return "bg-night"
+    if c == "SN":
+        return "bg-sn"
     if c in ("SW", "S"):
         return "bg-sw"
     if c == "R":
@@ -524,7 +527,7 @@ td.dc-cell.col-consolidated { opacity: 0.50; }
 
     for row in rows:
         eid = row["eid"]
-        name = row["name"]
+        name = _html.escape(row["name"])
         parts.append(
             f'<tr><td class="ncell" title="{name}">'
             f'<a href="#" id="emp-{eid}">{name}</a></td>'
@@ -581,8 +584,8 @@ from demo.parsing import parse_click_id as _parse_click_id  # noqa: E402
 def _render_detail_item(label: str, value: str) -> str:
     return (
         f'<div class="dp-item">'
-        f'<div class="dp-label">{label}</div>'
-        f'<div class="dp-value">{value}</div>'
+        f'<div class="dp-label">{_html.escape(str(label))}</div>'
+        f'<div class="dp-value">{_html.escape(str(value))}</div>'
         f'</div>'
     )
 
@@ -776,7 +779,17 @@ with st.sidebar:
             try:
                 st.session_state["data"] = load_dataset(dataset_folder)
                 st.session_state["loaded"] = True
-                st.session_state.pop("grid_selection", None)
+                # Pulisci stato sessione del dataset precedente
+                for _stale_key in (
+                    "draft", "view_draft", "grid_selection",
+                    "_ottimizza_req", "_cov_dlg_req",
+                    "calc_params", "show_coverage", "show_filters",
+                    "view_reparto", "view_role", "view_employee",
+                    "cov_selection", "_cov_click_counter",
+                    "_show_cov_counter", "_filtri_counter",
+                    "_det_counter", "_clear_counter",
+                ):
+                    st.session_state.pop(_stale_key, None)
             except Exception as e:
                 st.error(str(e))
         else:
@@ -1066,6 +1079,83 @@ st.markdown(
 
 
 # ── Coverage preview ─────────────────────────────────────────────────────
+
+
+def _build_assignments_df_preview(
+    assignments_df: pd.DataFrame,
+    edited_cells: dict,
+    employees_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Costruisce un assignments_df con override delle celle editate manualmente.
+
+    Per celle non editate, mantiene le assegnazioni solver originali.
+    Per celle editate:
+      - preassignment edit → reparto = home del dipendente
+      - lock edit → reparto = reparto indicato nel lock (se disponibile), altrimenti home
+      - shift_code = None → rimuove l'assegnazione (turno svuotato)
+    """
+    if assignments_df is None or assignments_df.empty:
+        adf = pd.DataFrame(
+            columns=["date", "reparto_id", "shift_code", "slot_id", "employee_id"]
+        )
+    else:
+        adf = assignments_df.copy()
+
+    if not edited_cells:
+        return adf
+
+    # Mappa employee_id → reparto home
+    _home_rep: dict[str, str] = {}
+    if not employees_df.empty and "employee_id" in employees_df.columns and "reparto_id" in employees_df.columns:
+        _home_rep = dict(zip(
+            employees_df["employee_id"].astype(str),
+            employees_df["reparto_id"].astype(str),
+        ))
+
+    # Risolvi priorità: per ogni (eid, date), lock vince su preassignment.
+    # Le chiavi di edited_cells sono (eid, date, edit_type).
+    effective: dict[tuple[str, str], dict] = {}
+    for key, info in edited_cells.items():
+        if len(key) == 3:
+            cell_eid, cell_date, edit_type = key
+        else:
+            # Backward compat: chiave vecchia (eid, date) senza tipo
+            cell_eid, cell_date = key[:2]
+            edit_type = info.get("edit_type", "preassignment")
+        prev = effective.get((cell_eid, cell_date))
+        # Lock ha sempre priorità su preassignment
+        if prev is None or edit_type == "lock":
+            effective[(cell_eid, cell_date)] = info
+
+    for (cell_eid, cell_date), info in effective.items():
+        # Rimuovi assegnazione solver per questa (employee, date)
+        if not adf.empty and "employee_id" in adf.columns and "date" in adf.columns:
+            rm = (
+                (adf["employee_id"].astype(str) == cell_eid)
+                & (adf["date"].apply(lambda x: str(pd.Timestamp(x).date())) == cell_date)
+            )
+            adf = adf[~rm].reset_index(drop=True)
+
+        shift = info.get("shift_code")
+        if shift is None:
+            continue  # turno svuotato ("--"), niente da aggiungere
+
+        # Determina reparto
+        if info.get("edit_type") == "lock" and info.get("reparto_id"):
+            rep = info["reparto_id"]
+        else:
+            rep = _home_rep.get(cell_eid, "")
+
+        adf = pd.concat([adf, pd.DataFrame([{
+            "date": pd.Timestamp(cell_date),
+            "reparto_id": rep,
+            "shift_code": shift,
+            "slot_id": "",
+            "employee_id": cell_eid,
+        }])], ignore_index=True)
+
+    return adf
+
 
 def compute_coverage_preview(
     data: dict,
@@ -1413,6 +1503,18 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
                 }])], ignore_index=True)
             st.session_state["draft"]["preassignments"] = draft_pa
             st.session_state["draft"]["manual_edits"] = True
+            # Registra cella editata per copertura preview.
+            # Anche "--" (svuota) va registrato con shift_code=None:
+            # _build_assignments_df_preview lo interpreta come "rimuovi
+            # l'assegnazione solver", allineando la copertura alla griglia.
+            _ec = st.session_state["draft"].get("edited_cells", {})
+            _pa_key = (str(eid), str(date_str), "preassignment")
+            _ec[_pa_key] = {
+                "edit_type": "preassignment",
+                "shift_code": selected if selected != "--" else None,
+                "reparto_id": None,
+            }
+            st.session_state["draft"]["edited_cells"] = _ec
         else:
             st.session_state["data"]["preassignments"] = df
         st.rerun()
@@ -1582,6 +1684,31 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
                             st.session_state["data"]["preassignments"] = pa
         if _in_draft_view:
             st.session_state["draft"]["manual_edits"] = True
+            _ec = st.session_state["draft"].get("edited_cells", {})
+            _lock_key = (str(eid), str(date_str), "lock")
+            _pa_key = (str(eid), str(date_str), "preassignment")
+            if must_sel != "-- nessuno --":
+                _ec[_lock_key] = {
+                    "edit_type": "lock",
+                    "shift_code": must_sel,
+                    "reparto_id": reparto_id_val if reparto_id_val else None,
+                }
+            elif _pa_key in _ec:
+                # MUST_DO rimosso ma c'è un override preassignment: basta
+                # togliere il lock, la preassignment prende il sopravvento.
+                _ec.pop(_lock_key, None)
+            else:
+                # MUST_DO rimosso e nessun override preassignment: serve un
+                # override esplicito None per cancellare l'assegnazione solver
+                # dalla preview copertura, coerente con la griglia che mostra
+                # la cella svuotata.
+                _ec.pop(_lock_key, None)
+                _ec[_pa_key] = {
+                    "edit_type": "preassignment",
+                    "shift_code": None,
+                    "reparto_id": None,
+                }
+            st.session_state["draft"]["edited_cells"] = _ec
         st.rerun()
 
 
@@ -1962,13 +2089,13 @@ def _grid_section():
             '<span class="sep"></span>'
             f'<a id="{clear_id}" href="#" class="{clear_cls}">&#128465; Svuota preassegnazioni</a>'
             '<span class="sep"></span>'
-            '<span class="btn">&Sigma; Mostra accum.</span>'
+            '<span class="btn off">&Sigma; Mostra accum.</span>'
             f'<a id="{show_cov_id}" href="#" class="{show_cov_cls}">&#128202; Mostra copertura</a>'
             '<span class="sep"></span>'
-            '<span class="btn">&#128260; Aggiorna</span>'
+            '<span class="btn off">&#128260; Aggiorna</span>'
             '<span class="sep"></span>'
-            '<span class="btn">&#128424; Stampa</span>'
-            '<span class="btn">&#128203; Export</span>'
+            '<span class="btn off">&#128424; Stampa</span>'
+            '<span class="btn off">&#128203; Export</span>'
             '<span class="sep"></span>'
             f'<a id="{filtri_id}" href="#" class="{filtri_cls}">&#9776; Filtri</a>'
             f'<span class="info">{n_emp} dipendenti &middot; {n_days} giorni &middot; {month_label}</span>'
@@ -2013,11 +2140,18 @@ def _grid_section():
         # assignments_df: se disponibile, viene usato per calcolare la copertura con
         # il reparto effettivo di lavoro (gestisce cross-dept). In draft mode si
         # prende dal draft; in normal mode da data (persistito al momento del salvataggio).
-        # Se bozza editata manualmente, assignments_df è stale → fallback griglia
+        # In bozza: usa assignments_df preview (solver + override celle editate).
+        # In piano corrente: usa assignments_df persistito (se presente).
         _cov_adf: pd.DataFrame | None = None
         if _view_draft and _draft:
-            if not _draft.get("manual_edits", False):
-                _cov_adf = _draft.get("assignments_df")
+            _base_adf = _draft.get("assignments_df")
+            _edited = _draft.get("edited_cells", {})
+            if _edited and _base_adf is not None:
+                _cov_adf = _build_assignments_df_preview(
+                    _base_adf, _edited, data.get("employees", pd.DataFrame())
+                )
+            else:
+                _cov_adf = _base_adf
         else:
             _cov_adf = data.get("assignments_df")
         cov_data: dict = {}
@@ -2167,6 +2301,7 @@ if _ottimizza_req:
             "base_preassignments":   _base2_pa,
             "base_locks":            _base2_locks,
             "manual_edits":          False,
+            "edited_cells":          {},
         }
 
         # ── Feedback warm start ───────────────────────────────────────────

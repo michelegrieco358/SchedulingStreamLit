@@ -11,6 +11,7 @@ from src.model import (
     CROSS_ASSIGNMENT_OBJECTIVE_SCALE,
     DUE_HOUR_OBJECTIVE_SCALE,
     ModelContext,
+    _resolve_due_hour_penalty_weights,
     build_model,
 )
 
@@ -534,3 +535,23 @@ def test_final_balance_objective_scales_with_role_minutes() -> None:
         round((weight * 1.5 / (8.0 * 60.0)) * DUE_HOUR_OBJECTIVE_SCALE)
     )
     assert coeff_value == expected_coeff
+
+
+def test_due_hour_specific_weights_override_defaults_balance() -> None:
+    cfg = {
+        "defaults": {
+            "balance": {
+                "due_hours_penalty_weight": 2.0,
+                "due_hours_under_penalty_weight": 3.0,
+                "due_hours_over_penalty_weight": 4.0,
+            }
+        },
+        "weights": {
+            "due_hours_under": 8.0,
+            "due_hours_over": 9.0,
+        },
+    }
+
+    under, over = _resolve_due_hour_penalty_weights(cfg)
+    assert under == pytest.approx(8.0)
+    assert over == pytest.approx(9.0)

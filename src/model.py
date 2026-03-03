@@ -362,6 +362,11 @@ def build_model(
 
     _apply_lock_constraints(context, model, assign_vars, bundle)
     _apply_state_lock_constraints(model, state_vars, bundle)
+
+    _validate_night_absence_compatibility(
+        context, bundle, absence_pairs, slot_date2, next_day_index,
+    )
+
     _add_cross_assignment_limits(context, model, assign_vars, bundle)
 
     hour_info = _add_hour_constraints(context, model, assign_vars, bundle)
@@ -459,8 +464,7 @@ def build_model(
         objective_terms.extend(terms)
         objective_metadata.extend(details)
 
-    if objective_terms:
-        model.Minimize(sum(objective_terms))
+    _apply_objective_from_metadata(model, objective_metadata)
 
     single_night_penalties = single_night_info.get("violations", {}) if isinstance(single_night_info, Mapping) else {}
     single_night_weight = float(single_night_info.get("weight", 0.0)) if isinstance(single_night_info, Mapping) else 0.0
@@ -1875,6 +1879,111 @@ def _compute_history_nights_by_week(
     return result
 
 
+def _validate_night_absence_compatibility(
+    context: ModelContext,
+    bundle: Mapping[str, object],
+    absence_pairs: set[tuple[int, int]],
+    slot_date2: Mapping[int, int],
+    next_day_index: Mapping[int, int | None],
+) -> None:
+    """Emette un warning se un lock MUST su slot/stato notturno genera conflitto
+    con un'assenza forzata il giorno successivo.
+
+    Controlla sia i lock di assegnamento (locks_must su slot notturni) sia
+    i lock di stato (locks_state_pairs con MUST_DO su codice notte).
+
+    Il vincolo ``restricted_after_night`` impedisce lo stato F dopo N,
+    quindi se un lock forza N al giorno D e F e' forzato al giorno D+1
+    il modello diventa infeasible.
+    """
+    if not absence_pairs:
+        return
+
+    night_codes = _resolve_night_codes(
+        context.cfg if isinstance(context.cfg, Mapping) else {}
+    )
+    if not night_codes:
+        return
+
+    eid_of: Mapping[str, int] = bundle.get("eid_of", {})  # type: ignore[assignment]
+    sid_of: Mapping[object, int] = bundle.get("sid_of", {})  # type: ignore[assignment]
+    emp_of: Mapping[int, str] = bundle.get("emp_of", {})  # type: ignore[assignment]
+    date_of: Mapping[int, object] = bundle.get("date_of", {})  # type: ignore[assignment]
+
+    conflicts: list[str] = []
+
+    # --- Slot-lock MUST su turni notturni ---
+    locks_must = getattr(context, "locks_must", pd.DataFrame())
+    if locks_must is not None and not locks_must.empty:
+        slot_shiftcode: dict[int, str] = {}
+        if not context.slots.empty and "shift_code" in context.slots.columns:
+            for row in context.slots.loc[:, ["slot_id", "shift_code"]].itertuples(index=False):
+                slot_idx = sid_of.get(getattr(row, "slot_id"))
+                if slot_idx is not None:
+                    slot_shiftcode[slot_idx] = str(getattr(row, "shift_code")).strip().upper()
+
+        must_df = locks_must.loc[:, ["employee_id", "slot_id"]].copy()
+        must_df["employee_id"] = must_df["employee_id"].astype(str).str.strip()
+        must_df["slot_id"] = pd.to_numeric(must_df["slot_id"], errors="coerce")
+        must_df = must_df.dropna(subset=["slot_id"])
+        must_df["slot_id"] = must_df["slot_id"].astype(int)
+
+        for employee_id, slot_id in must_df.itertuples(index=False):
+            slot_idx = sid_of.get(slot_id)
+            if slot_idx is None:
+                continue
+            shift_code = slot_shiftcode.get(slot_idx, "")
+            if shift_code not in night_codes:
+                continue
+            emp_idx = eid_of.get(employee_id)
+            if emp_idx is None:
+                continue
+            day_idx = slot_date2.get(slot_idx)
+            if day_idx is None:
+                continue
+            next_idx = next_day_index.get(day_idx)
+            if next_idx is None:
+                continue
+            if (emp_idx, next_idx) in absence_pairs:
+                day_str = str(date_of.get(day_idx, f"day_idx={day_idx}"))
+                next_day_str = str(date_of.get(next_idx, f"day_idx={next_idx}"))
+                emp_label = emp_of.get(emp_idx, employee_id)
+                conflicts.append(
+                    f"  {emp_label}: slot-lock N il {day_str}, assenza forzata il {next_day_str}"
+                )
+
+    # --- State-lock MUST_DO su codice notte ---
+    locks_state_pairs: list = bundle.get("locks_state_pairs", [])  # type: ignore[assignment]
+    for entry in locks_state_pairs:
+        if not isinstance(entry, (tuple, list)) or len(entry) < 4:
+            continue
+        emp_idx, day_idx, state_code, lock_value = entry[:4]
+        if lock_value != 1:
+            continue
+        if str(state_code).strip().upper() not in night_codes:
+            continue
+        next_idx = next_day_index.get(day_idx)
+        if next_idx is None:
+            continue
+        if (emp_idx, next_idx) in absence_pairs:
+            day_str = str(date_of.get(day_idx, f"day_idx={day_idx}"))
+            next_day_str = str(date_of.get(next_idx, f"day_idx={next_idx}"))
+            emp_label = emp_of.get(emp_idx, f"emp_idx={emp_idx}")
+            conflicts.append(
+                f"  {emp_label}: state-lock N il {day_str}, assenza forzata il {next_day_str}"
+            )
+
+    if conflicts:
+        detail = "\n".join(conflicts)
+        warnings.warn(
+            f"Conflitto lock notte / assenza forzata rilevato.\n"
+            f"Il vincolo 'restricted_after_night' impedisce lo stato F dopo N: "
+            f"il modello potrebbe essere infeasible.\n{detail}",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def _apply_lock_constraints(
     context: ModelContext,
     model: cp_model.CpModel,
@@ -1986,8 +2095,13 @@ def _apply_state_lock_constraints(
             continue
         if lock_value == 1:
             model.Add(var == 1)
-        else:
+        elif lock_value == -1:
             model.Add(var == 0)
+        else:
+            raise ValueError(
+                "locks_state_pairs contiene lock non valido "
+                f"(attesi 1/-1): {(emp_idx, day_idx, state_code, lock_value)}"
+            )
 
 
 def _add_hour_constraints(
@@ -2126,6 +2240,15 @@ def _add_hour_constraints(
                 monthly_balance_bounds[(emp_idx, month_id)] = bound
                 monthly_under_vars[(emp_idx, month_id)] = under_var
                 monthly_over_vars[(emp_idx, month_id)] = over_var
+
+                # Complementarita' esplicita: al piu' uno tra under e over
+                # puo' essere > 0. L'ottimizzatore lo garantisce implicitamente,
+                # ma il vincolo esplicito riduce il dominio di ricerca.
+                is_under = model.NewBoolVar(
+                    f"month_is_under_e{emp_idx}_m{month_id}"
+                )
+                model.Add(over_var == 0).OnlyEnforceIf(is_under)
+                model.Add(under_var == 0).OnlyEnforceIf(is_under.Not())
 
                 balance_delta = params.get("max_balance_delta_minutes")
                 if isinstance(balance_delta, int) and balance_delta > 0:
@@ -2271,10 +2394,15 @@ def _resolve_due_hour_penalty_weights(
     over_weight = base
 
     if isinstance(cfg, Mapping):
-        weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
-        if isinstance(weights_cfg, Mapping):
-            under_raw = weights_cfg.get("due_hours_under")
-            over_raw = weights_cfg.get("due_hours_over")
+        defaults = cfg.get("defaults") if isinstance(cfg.get("defaults"), Mapping) else None
+        balance_cfg = (
+            defaults.get("balance")
+            if isinstance(defaults.get("balance"), Mapping)
+            else None
+        )
+        if isinstance(balance_cfg, Mapping):
+            under_raw = balance_cfg.get("due_hours_under_penalty_weight")
+            over_raw = balance_cfg.get("due_hours_over_penalty_weight")
             if under_raw is not None:
                 try:
                     under_weight = max(float(under_raw), 0.0)
@@ -2286,16 +2414,12 @@ def _resolve_due_hour_penalty_weights(
                 except (TypeError, ValueError):
                     over_weight = base
 
+    # weights.* must be the final override on top of defaults.*
     if isinstance(cfg, Mapping):
-        defaults = cfg.get("defaults") if isinstance(cfg.get("defaults"), Mapping) else None
-        balance_cfg = (
-            defaults.get("balance")
-            if isinstance(defaults.get("balance"), Mapping)
-            else None
-        )
-        if isinstance(balance_cfg, Mapping):
-            under_raw = balance_cfg.get("due_hours_under_penalty_weight")
-            over_raw = balance_cfg.get("due_hours_over_penalty_weight")
+        weights_cfg = cfg.get("weights") if isinstance(cfg.get("weights"), Mapping) else None
+        if isinstance(weights_cfg, Mapping):
+            under_raw = weights_cfg.get("due_hours_under")
+            over_raw = weights_cfg.get("due_hours_over")
             if under_raw is not None:
                 try:
                     under_weight = max(float(under_raw), 0.0)
@@ -3346,6 +3470,20 @@ def _existing_objective_terms_from_metadata(
     return terms
 
 
+def _apply_objective_from_metadata(
+    model: cp_model.CpModel,
+    metadata: Iterable[ObjectiveTermContribution],
+) -> None:
+    """Imposta (o sovrascrive) l'obiettivo del modello a partire dai metadata.
+
+    Questa e' l'unico punto in cui ``model.Minimize`` viene chiamato,
+    garantendo che l'obiettivo sia sempre coerente con i metadata correnti.
+    """
+    terms = _existing_objective_terms_from_metadata(metadata)
+    if terms:
+        model.Minimize(sum(terms))
+
+
 def _build_slot_reparto_index(
     context: ModelContext, bundle: Mapping[str, object]
 ) -> dict[int, str]:
@@ -4345,8 +4483,6 @@ def _add_night_constraints(
         day_slots[day_idx].append(slot_idx)
 
     employee_limits = _extract_employee_night_params(context, bundle)
-    if not employee_limits:
-        return result
 
     eid_of: Mapping[str, int] = bundle.get("eid_of", {})  # type: ignore[assignment]
     month_history = _build_month_history_nights(bundle, eid_of)
@@ -4444,18 +4580,20 @@ def _add_night_constraints(
             or history_streak > 0
         )
 
-        if not has_restriction:
-            continue
-
-        streak_upper = consecutive_limit if consecutive_limit is not None else num_days
-        if streak_upper is None or streak_upper < 0:
-            streak_upper = num_days
-        streak_upper = max(int(streak_upper), 0)
-        extra_upper = max(streak_upper - 1, 0)
+        streak_upper = 0
+        extra_upper = 0
+        if has_restriction:
+            streak_upper = consecutive_limit if consecutive_limit is not None else num_days
+            if streak_upper is None or streak_upper < 0:
+                streak_upper = num_days
+            streak_upper = max(int(streak_upper), 0)
+            extra_upper = max(streak_upper - 1, 0)
 
         extras_for_emp: list[cp_model.IntVar] = []
 
         for day_idx in range(num_days):
+            # Indicatore notte: creato SEMPRE per ogni dipendente/giorno
+            # (necessario per la fairness notti anche senza restrizioni).
             night_var = model.NewBoolVar(f"is_night_e{emp_idx}_d{day_idx}")
             night_by_day[(emp_idx, day_idx)] = night_var
 
@@ -4474,6 +4612,10 @@ def _add_night_constraints(
                     model.Add(night_var == 1)
                 else:
                     model.Add(night_var == 0)
+
+            # Streak/extra: solo per dipendenti con restrizioni consecutive.
+            if not has_restriction:
+                continue
 
             streak_var = model.NewIntVar(
                 0,
@@ -4517,7 +4659,7 @@ def _add_night_constraints(
 
             model.Add(streak_var - extra_var == 1).OnlyEnforceIf(night_var)
 
-        if extras_for_emp:
+        if has_restriction and extras_for_emp:
             bound = len(extras_for_emp) * max(extra_upper, 0)
             total = model.NewIntVar(0, bound, f"night_extra_total_e{emp_idx}")
             model.Add(total == sum(extras_for_emp))
@@ -4880,7 +5022,17 @@ def _add_rest_constraints(
         return result
 
     num_employees = int(bundle.get("num_employees", len(eid_of)))
-    num_days = int(bundle.get("num_days", len(slot_date2)))
+    num_days_raw = bundle.get("num_days")
+    if num_days_raw is not None:
+        num_days = int(num_days_raw)
+    else:
+        did_of: Mapping[object, int] = bundle.get("did_of", {})  # type: ignore[assignment]
+        if did_of:
+            num_days = len(did_of)
+        elif slot_date2:
+            num_days = max(int(day_idx) for day_idx in slot_date2.values()) + 1
+        else:
+            num_days = 0
 
     day_flags: dict[tuple[int, int], cp_model.BoolVar] = {}
     for emp_idx in range(num_employees):
@@ -5489,8 +5641,7 @@ def add_coverage_constraints(context: ModelContext, artifacts: ModelArtifacts) -
     artifacts.coverage_under_group = coverage_under_group
     artifacts.objective_terms = tuple(objective_metadata)
 
-    if objective_terms:
-        model.Minimize(sum(objective_terms))
+    _apply_objective_from_metadata(model, objective_metadata)
 
 
 def _fetch(store: Any, *candidates: str) -> Any:

@@ -105,6 +105,8 @@ table.sky-grid tbody td.ncell {
 .bg-rest .l1 { color: #999; font-weight: 400; }
 .bg-night { background-color: #3a3a6e !important; color: #fff !important; }
 .bg-night .l1, .bg-night .l2, .bg-night .l3 { color: #fff !important; }
+.bg-sn    { background-color: #b8a9d4 !important; color: #2d1f4e !important; }
+.bg-sn .l1 { font-weight: 500; }
 
 /* --- Scrollbar --- */
 .sched-container::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -430,6 +432,8 @@ table.sky-grid tbody td.ncell {
 /* Night shift special */
 .bg-night { background-color: #3a3a6e !important; color: #fff !important; }
 .bg-night .l1, .bg-night .l2, .bg-night .l3 { color: #fff !important; }
+.bg-sn    { background-color: #b8a9d4 !important; color: #2d1f4e !important; }
+.bg-sn .l1 { font-weight: 500; }
 
 /* ===== SCROLLBAR ===== */
 .sched-container::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -606,10 +610,13 @@ td.ncell a.cell-link { line-height: var(--cell-h); }
 }
 td.ncell:hover, td.dc-cell:hover { filter: brightness(0.90); cursor: pointer; }
 
-/* ===== HIDE default Streamlit header & footer ===== */
-header[data-testid="stHeader"] { display: none !important; }
-footer { display: none !important; }
+/* ===== HIDE default Streamlit chrome (keep sidebar toggle visible) ===== */
+header[data-testid="stHeader"] {
+    background: transparent !important;
+    border-bottom: none !important;
+}
 #MainMenu { display: none !important; }
+footer { display: none !important; }
 </style>
 """
 
