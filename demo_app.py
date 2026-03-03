@@ -2079,6 +2079,7 @@ if _ottimizza_req:
                         _warm_df["slot_id"], errors="coerce"
                     )
                     _warm_df = _warm_df.dropna(subset=["employee_id", "slot_id"])
+                    _warm_df = _warm_df.drop_duplicates(subset=["employee_id", "slot_id"])
             if _warm_df is None or _warm_df.empty:
                 _warm_df = None
                 _warm_fallback = True
@@ -2239,7 +2240,8 @@ if _draft:
                   if _feasible else "Non disponibile: bozza non valida."),
         ):
             _cm_params = st.session_state.get("calc_params")
-            if _cm_params and "start" in _cm_params and "time_s" in _cm_params:
+            _req_keys = {"start", "end", "cross", "time_s", "reparti", "stability"}
+            if _cm_params and _req_keys.issubset(_cm_params):
                 _cm_params = dict(_cm_params)
                 _cm_params["use_warm_start"] = True
                 st.session_state["_ottimizza_req"] = _cm_params
