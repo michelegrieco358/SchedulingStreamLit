@@ -1140,7 +1140,7 @@ def _extract_employee_hour_params(
         emp_idx = eid_of.get(emp_id)
         if emp_idx is None:
             continue
-        role_u = roles.iloc[row_idx] if row_idx in roles.index else ""
+        role_u = str(roles.at[row_idx]).strip().upper() if row_idx in roles.index else ""
 
         due_hours = _pick_float(row, [
             "ore_dovute_mese_h",
@@ -2371,7 +2371,8 @@ def _extract_start_balance_series(context: ModelContext) -> pd.Series:
         return pd.Series(dtype=float)
 
     emp_ids = employees["employee_id"].astype(str).str.strip()
-    candidates = [
+    # Candidati in ore
+    candidates_h = [
         "start_balance",
         "start_balance_h",
         "saldo_prog_iniziale_h",
@@ -2379,12 +2380,23 @@ def _extract_start_balance_series(context: ModelContext) -> pd.Series:
         "saldo_iniziale_ore",
         "saldo_iniziale",
     ]
+    # Candidati in minuti (verranno convertiti in ore)
+    candidates_min = [
+        "saldo_init_min",
+        "start_balance_min",
+    ]
 
     values = None
-    for column in candidates:
+    for column in candidates_h:
         if column in employees.columns:
             values = pd.to_numeric(employees[column], errors="coerce")
             break
+
+    if values is None:
+        for column in candidates_min:
+            if column in employees.columns:
+                values = pd.to_numeric(employees[column], errors="coerce") / 60.0
+                break
 
     if values is None:
         values = pd.Series(0.0, index=employees.index)
@@ -3289,6 +3301,10 @@ def _resolve_coverage_under_coefficients(
             return 0.0
         return parsed
 
+    # Demo defaults when coverage weights are missing or non-effective (<= 0).
+    default_role_coeff = 1_000_000
+    default_group_coeff = 1_200_000
+
     configured_role = 0.0
     configured_group = 0.0
     configured_other_max_coeff = 0
@@ -3305,14 +3321,16 @@ def _resolve_coverage_under_coefficients(
 
     configured_role_coeff = int(round(configured_role * COVERAGE_OBJECTIVE_SCALE))
     configured_group_coeff = int(round(configured_group * COVERAGE_OBJECTIVE_SCALE))
+    role_base_coeff = configured_role_coeff if configured_role_coeff > 0 else default_role_coeff
+    group_base_coeff = configured_group_coeff if configured_group_coeff > 0 else default_group_coeff
 
     max_other_coeff = 0
     for term in existing_terms:
         max_other_coeff = max(max_other_coeff, int(term.coeff))
     max_other_coeff = max(max_other_coeff, configured_other_max_coeff)
 
-    role_coeff = max(1, configured_role_coeff, max_other_coeff + 1)
-    group_coeff = max(1, configured_group_coeff, max_other_coeff + 2, role_coeff + 1)
+    role_coeff = max(1, role_base_coeff, max_other_coeff + 1)
+    group_coeff = max(1, group_base_coeff, max_other_coeff + 2, role_coeff + 1)
     return role_coeff, group_coeff
 
 

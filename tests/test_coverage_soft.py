@@ -224,6 +224,130 @@ def test_coverage_dominance_uses_effective_objective_coefficients() -> None:
     assert group_coeff > role_coeff
 
 
+def test_coverage_coefficients_use_strong_defaults_when_missing() -> None:
+    employees = pd.DataFrame({"employee_id": ["E1"], "role": ["INFERMIERE"]})
+    slots = pd.DataFrame(
+        {
+            "slot_id": [1],
+            "shift_code": ["M"],
+            "coverage_code": ["COV"],
+            "reparto_id": ["REP1"],
+            "date": [date(2025, 1, 1)],
+        }
+    )
+    slot_requirements = pd.DataFrame(
+        {"slot_id": [1], "role": ["INFERMIERE"], "demand": [1]}
+    )
+    coverage_totals = pd.DataFrame(
+        {
+            "coverage_code": ["COV"],
+            "shift_code": ["M"],
+            "reparto_id": ["REP1"],
+            "total_staff": [1],
+            "ruoli_totale": ["INFERMIERE"],
+        }
+    )
+    calendar = pd.DataFrame({"data": [pd.Timestamp("2025-01-01")]})
+    empty = pd.DataFrame()
+
+    context = ModelContext(
+        cfg={"weights": {"rest11": 10.0}},
+        employees=employees,
+        slots=slots,
+        coverage_roles=empty,
+        coverage_totals=coverage_totals,
+        slot_requirements=slot_requirements,
+        availability=empty,
+        leaves=empty,
+        history=empty,
+        locks_must=empty,
+        locks_forbid=empty,
+        gap_pairs=empty,
+        calendars=calendar,
+        preassignments=empty,
+        bundle=_base_bundle(),
+    )
+
+    artifacts = build_model(context)
+    add_coverage_constraints(context, artifacts)
+
+    by_component = {}
+    for item in artifacts.objective_terms:
+        by_component.setdefault(item.component, []).append(item.coeff)
+
+    role_coeff = min(by_component["copertura_ruolo_scopertura"])
+    group_coeff = min(by_component["copertura_gruppo_scopertura"])
+
+    assert role_coeff >= 1_000_000
+    assert group_coeff >= 1_200_000
+    assert group_coeff > role_coeff
+
+
+def test_coverage_coefficients_use_strong_defaults_when_zero() -> None:
+    employees = pd.DataFrame({"employee_id": ["E1"], "role": ["INFERMIERE"]})
+    slots = pd.DataFrame(
+        {
+            "slot_id": [1],
+            "shift_code": ["M"],
+            "coverage_code": ["COV"],
+            "reparto_id": ["REP1"],
+            "date": [date(2025, 1, 1)],
+        }
+    )
+    slot_requirements = pd.DataFrame(
+        {"slot_id": [1], "role": ["INFERMIERE"], "demand": [1]}
+    )
+    coverage_totals = pd.DataFrame(
+        {
+            "coverage_code": ["COV"],
+            "shift_code": ["M"],
+            "reparto_id": ["REP1"],
+            "total_staff": [1],
+            "ruoli_totale": ["INFERMIERE"],
+        }
+    )
+    calendar = pd.DataFrame({"data": [pd.Timestamp("2025-01-01")]})
+    empty = pd.DataFrame()
+
+    context = ModelContext(
+        cfg={
+            "weights": {
+                "coverage_under_role": 0.0,
+                "coverage_under_group": 0.0,
+                "rest11": 10.0,
+            }
+        },
+        employees=employees,
+        slots=slots,
+        coverage_roles=empty,
+        coverage_totals=coverage_totals,
+        slot_requirements=slot_requirements,
+        availability=empty,
+        leaves=empty,
+        history=empty,
+        locks_must=empty,
+        locks_forbid=empty,
+        gap_pairs=empty,
+        calendars=calendar,
+        preassignments=empty,
+        bundle=_base_bundle(),
+    )
+
+    artifacts = build_model(context)
+    add_coverage_constraints(context, artifacts)
+
+    by_component = {}
+    for item in artifacts.objective_terms:
+        by_component.setdefault(item.component, []).append(item.coeff)
+
+    role_coeff = min(by_component["copertura_ruolo_scopertura"])
+    group_coeff = min(by_component["copertura_gruppo_scopertura"])
+
+    assert role_coeff >= 1_000_000
+    assert group_coeff >= 1_200_000
+    assert group_coeff > role_coeff
+
+
 def test_group_requirements_join_respects_date_dimension() -> None:
     """Il fabbisogno gruppo deve agganciarsi solo agli slot dello stesso giorno."""
     employees = pd.DataFrame(
