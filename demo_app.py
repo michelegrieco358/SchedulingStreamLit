@@ -1294,6 +1294,20 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
             except Exception:
                 pass
 
+    # ── Rilevamento edit draft (cella nella finestra di ottimizzazione) ────
+    _edit_draft = False
+    if st.session_state.get("view_draft") and _draft:
+        _cs = _draft.get("calc_start")
+        _ce = _draft.get("calc_end")
+        if _cs and _ce:
+            try:
+                _d = pd.Timestamp(date_str).date()
+                _edit_draft = (
+                    pd.Timestamp(_cs).date() <= _d <= pd.Timestamp(_ce).date()
+                )
+            except Exception:
+                pass
+
     show_shift_detail(eid, date_str, app_data)
 
     if _is_consolidated:
@@ -1320,152 +1334,255 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
     )
     non_demand_codes = [s for s in _all_sc if s not in demand_shift_ids]
 
-    # Collect FORBIDDEN shifts for this emp+date to exclude from preassignment options
+    # Collect locks for this emp+date
     _locks_early = app_data.get("locks", pd.DataFrame())
     _forbidden_for_pa: set[str] = set()
+    _has_must_do: str | None = None  # turno forzato da lock MUST_DO
     if not _locks_early.empty and "lock_type" in _locks_early.columns:
-        _fm = (
+        _emp_date_mask = (
             (_locks_early["employee_id"].astype(str) == eid)
             & (_locks_early["date"] == date_str)
-            & (_locks_early["lock_type"] == "FORBIDDEN")
         )
+        _fm = _emp_date_mask & (_locks_early["lock_type"] == "FORBIDDEN")
         _forbidden_for_pa = set(_locks_early[_fm]["shift_code"].astype(str).tolist())
+        _must_rows = _locks_early[_emp_date_mask & (_locks_early["lock_type"] == "MUST_DO")]
+        if not _must_rows.empty:
+            _has_must_do = str(_must_rows.iloc[0]["shift_code"])
     # Preassignment options: demand shifts from CSV + non-demand state codes (SN, R…), minus forbidden
     _shift_csv_ids = list(shifts_df["shift_id"].astype(str).unique())
     _extra_sc = [s for s in _all_sc if s not in set(_shift_csv_ids)]
     shift_options = ["--"] + [
         s for s in _shift_csv_ids + _extra_sc if s not in _forbidden_for_pa
     ]
-    pa_df = app_data["preassignments"]
+    pa_df = _draft["preassignments"] if _edit_draft else app_data["preassignments"]
     current = "--"
     _pa_code_col = next((c for c in ("state_code", "shift_code", "turno") if c in pa_df.columns), None)
     if not pa_df.empty and "employee_id" in pa_df.columns and "data" in pa_df.columns and _pa_code_col:
-        mask = (pa_df["employee_id"].astype(str) == eid) & (pa_df["data"] == date_str)
+        mask = (pa_df["employee_id"].astype(str) == eid) & (pa_df["data"].astype(str) == date_str)
         if mask.any():
             current = str(pa_df.loc[mask, _pa_code_col].iloc[0])
     # If current preassignment is now forbidden, reset to "--"
     if current in _forbidden_for_pa:
         current = "--"
-    idx = shift_options.index(current) if current in shift_options else 0
-    selected = st.selectbox("Modifica preassegnazione", shift_options, index=idx, disabled=_is_consolidated)
-    if st.button("Salva", type="primary", disabled=_is_consolidated):
-        df = app_data["preassignments"].copy()
-        if not df.empty and "employee_id" in df.columns and "data" in df.columns:
-            mask = (df["employee_id"].astype(str) == eid) & (df["data"] == date_str)
-            df = df[~mask].reset_index(drop=True)
-        if selected != "--":
-            new_row = pd.DataFrame([{"employee_id": eid, "data": date_str, "state_code": selected}])
-            df = pd.concat([df, new_row], ignore_index=True)
-        st.session_state["data"]["preassignments"] = df
-        st.rerun()
-
-    # ── Sezione Lock ─────────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("⚠️ **Lock turno** *(vincolo hard — sovrascrive preassegnazione)*")
-
-    # Lista completa per lock: prima domanda (solo quelli con slot), poi non-domanda
-    all_lock_codes = (
-        [s for s in shifts_df["shift_id"].astype(str).unique() if s in demand_shift_ids]
-        + non_demand_codes
-    )
-
-    # Leggi lock attuali per questo dipendente+data
-    locks_df = app_data.get("locks", pd.DataFrame())
-    must_shift: str | None = None
-    forbidden_shifts: list[str] = []
-    must_reparto: str = ""
-    if not locks_df.empty and "lock_type" in locks_df.columns:
-        lmask = (locks_df["employee_id"].astype(str) == eid) & (locks_df["date"] == date_str)
-        emp_locks = locks_df[lmask]
-        must_rows = emp_locks[emp_locks["lock_type"] == "MUST_DO"]
-        if not must_rows.empty:
-            must_shift = str(must_rows.iloc[0]["shift_code"])
-            must_reparto = str(must_rows.iloc[0].get("reparto_id", ""))
-        forbidden_shifts = emp_locks[emp_locks["lock_type"] == "FORBIDDEN"]["shift_code"].tolist()
-
-    # Reparto: "-- qualsiasi --" → state lock; reparto specifico → slot lock (solo domanda)
-    emp_df = app_data["employees"]
-    emp_reparto = ""
-    emp_match = emp_df[emp_df["employee_id"].astype(str) == eid]
-    if not emp_match.empty:
-        emp_reparto = str(emp_match.iloc[0].get("reparto_id", ""))
-    all_reparti = sorted(emp_df["reparto_id"].dropna().unique().tolist())
-    reparto_options = ["-- qualsiasi --"] + all_reparti
-    # Default reparto: quello del lock esistente; "-- qualsiasi --" per non-domanda o assente
-    if must_reparto and must_reparto in all_reparti:
-        _def_rep = must_reparto
-    elif must_shift and must_shift not in demand_shift_ids:
-        _def_rep = "-- qualsiasi --"
-    else:
-        _def_rep = emp_reparto if emp_reparto in all_reparti else "-- qualsiasi --"
-    reparto_sel = st.selectbox(
-        "Reparto", reparto_options,
-        index=reparto_options.index(_def_rep) if _def_rep in reparto_options else 0,
-        key="dlg_lock_reparto",
-        disabled=_is_consolidated,
-    )
-
-    must_options = ["-- nessuno --"] + all_lock_codes
-    must_idx = must_options.index(must_shift) if must_shift in must_options else 0
-    must_sel = st.selectbox("Forza turno (MUST_DO)", must_options, index=must_idx, key="dlg_lock_must", disabled=_is_consolidated)
-
-    # Indicatore tipo di lock
-    if must_sel != "-- nessuno --":
-        if must_sel in demand_shift_ids and reparto_sel != "-- qualsiasi --":
-            st.caption(f"→ lock su **slot** ({must_sel} · reparto {reparto_sel})")
-        elif must_sel in demand_shift_ids:
-            st.caption(f"→ lock su **stato giornaliero** (qualsiasi slot {must_sel})")
-        else:
-            st.caption(f"→ lock su **stato giornaliero** ({must_sel})")
-
-    forbidden_choices = [s for s in all_lock_codes if s != must_sel]
-    forbidden_default = [f for f in forbidden_shifts if f in forbidden_choices]
-    forbidden_sel = st.multiselect(
-        "Vieta turni (FORBIDDEN)", forbidden_choices, default=forbidden_default,
-        key="dlg_lock_forbidden",
-        disabled=_is_consolidated,
-    )
-
-    if st.button("Salva lock", key="dlg_lock_save", disabled=_is_consolidated):
-        # reparto_id vuoto → state lock; valorizzato → slot lock (se domanda)
-        reparto_id_val = "" if reparto_sel == "-- qualsiasi --" else reparto_sel
-        ldf = locks_df.copy() if not locks_df.empty else pd.DataFrame(
-            columns=["employee_id", "date", "reparto_id", "shift_code", "lock_type"]
+    # ── Lock MUST_DO: in draft mode, avvisa ma consenti override ─────────
+    _has_must_do_in_draft = _edit_draft and _has_must_do is not None
+    if _has_must_do_in_draft:
+        st.warning(
+            f"Questa cella ha un lock MUST_DO attivo (turno **{_has_must_do}**). "
+            "Se salvi una modifica diversa, il lock verrà ignorato nella bozza "
+            "e rimosso dal piano corrente al salvataggio della bozza."
         )
-        # Rimuovi lock precedenti per questo dipendente+data
-        if not ldf.empty and "employee_id" in ldf.columns:
-            lmask2 = (ldf["employee_id"].astype(str) == eid) & (ldf["date"] == date_str)
-            ldf = ldf[~lmask2].reset_index(drop=True)
-        # Aggiungi MUST_DO se selezionato
-        if must_sel != "-- nessuno --":
-            ldf = pd.concat([ldf, pd.DataFrame([{
-                "employee_id": eid, "date": date_str,
-                "reparto_id": reparto_id_val if must_sel in demand_shift_ids else "",
-                "shift_code": must_sel, "lock_type": "MUST_DO",
-            }])], ignore_index=True)
-        # Aggiungi FORBIDDEN
-        for fs in forbidden_sel:
-            ldf = pd.concat([ldf, pd.DataFrame([{
-                "employee_id": eid, "date": date_str,
-                "reparto_id": reparto_id_val if fs in demand_shift_ids else "",
-                "shift_code": fs, "lock_type": "FORBIDDEN",
-            }])], ignore_index=True)
-        st.session_state["data"]["locks"] = ldf
-        # Se un turno vietato coincide con la preassegnazione attiva → svuota
-        if forbidden_sel:
-            pa = st.session_state["data"]["preassignments"].copy()
-            if not pa.empty and "employee_id" in pa.columns and "data" in pa.columns:
-                code_col = next((c for c in ("state_code", "shift_code", "turno") if c in pa.columns), None)
-                if code_col:
-                    pmask = (
-                        (pa["employee_id"].astype(str) == eid)
-                        & (pa["data"] == date_str)
-                        & (pa[code_col].astype(str).isin(forbidden_sel))
-                    )
-                    if pmask.any():
-                        pa = pa[~pmask].reset_index(drop=True)
-                        st.session_state["data"]["preassignments"] = pa
+
+    _edit_disabled = _is_consolidated
+    idx = shift_options.index(current) if current in shift_options else 0
+    _sel_label = "Modifica turno" if _edit_draft else "Modifica preassegnazione"
+    selected = st.selectbox(_sel_label, shift_options, index=idx, disabled=_edit_disabled)
+
+    # ── Selettore reparto (solo draft mode + turno di lavoro) ─────────────
+    _selected_reparto: str | None = None
+    if _edit_draft and selected != "--" and selected in demand_shift_ids:
+        _emp_df = app_data.get("employees", pd.DataFrame())
+        _home_rep = ""
+        if not _emp_df.empty:
+            _emask = _emp_df["employee_id"].astype(str) == eid
+            if _emask.any():
+                _home_rep = str(_emp_df.loc[_emask, "reparto_id"].iloc[0])
+
+        # Filtra reparti con fabbisogno per questo turno+data (da month_plan)
+        _mp_df = app_data.get("month_plan", pd.DataFrame())
+        _valid_reps: list[str] = []
+        if not _mp_df.empty and "reparto_id" in _mp_df.columns and "shift_code" in _mp_df.columns:
+            _mp_mask = (
+                (_mp_df["data"].astype(str) == date_str)
+                & (_mp_df["shift_code"].astype(str).str.strip().str.upper() == selected.strip().upper())
+            )
+            _valid_reps = sorted(
+                _mp_df.loc[_mp_mask, "reparto_id"].astype(str).unique().tolist()
+            )
+
+        if _valid_reps:
+            _all_reps = _valid_reps
+        else:
+            # Fallback: tutti i reparti, con avviso
+            _all_reps = sorted(
+                _emp_df["reparto_id"].astype(str).unique().tolist()
+            ) if not _emp_df.empty else []
+            if _all_reps:
+                st.caption("Nessun fabbisogno trovato per questo turno in questa data.")
+
+        if _all_reps:
+            _rep_idx = _all_reps.index(_home_rep) if _home_rep in _all_reps else 0
+            _selected_reparto = st.selectbox("Reparto", _all_reps, index=_rep_idx)
+
+    if st.button("Salva", type="primary", disabled=_edit_disabled):
+        if _edit_draft:
+            # ── Aggiorna draft preassignments (stati giornalieri → griglia) ──
+            df = _draft["preassignments"].copy()
+            if not df.empty and "employee_id" in df.columns and "data" in df.columns:
+                mask = (
+                    (df["employee_id"].astype(str) == eid)
+                    & (df["data"].astype(str) == date_str)
+                )
+                df = df[~mask].reset_index(drop=True)
+            if selected != "--":
+                df = pd.concat([df, pd.DataFrame([{
+                    "employee_id": eid, "data": date_str, "state_code": selected,
+                }])], ignore_index=True)
+            st.session_state["draft"]["preassignments"] = df
+
+            # ── Aggiorna assignments_df (assegnazioni slot → copertura) ──
+            adf = _draft.get("assignments_df")
+            if adf is not None:
+                adf = adf.copy()
+                adf_mask = (
+                    (adf["employee_id"].astype(str) == eid)
+                    & (adf["date"].apply(
+                        lambda x: str(pd.Timestamp(x).date())
+                    ) == date_str)
+                )
+                adf = adf[~adf_mask].reset_index(drop=True)
+                if (
+                    selected != "--"
+                    and selected in demand_shift_ids
+                    and _selected_reparto
+                ):
+                    adf = pd.concat([adf, pd.DataFrame([{
+                        "date": pd.Timestamp(date_str),
+                        "reparto_id": _selected_reparto,
+                        "shift_code": selected,
+                        "slot_id": "",
+                        "employee_id": eid,
+                    }])], ignore_index=True)
+                st.session_state["draft"]["assignments_df"] = adf
+
+            st.session_state["draft"]["manually_edited"] = True
+
+            # ── Se c'era un lock MUST_DO e il turno è diverso, registra override ──
+            if _has_must_do_in_draft and selected != _has_must_do:
+                _ov = st.session_state["draft"].get("overridden_locks", set())
+                _ov.add((str(eid), str(date_str)))
+                st.session_state["draft"]["overridden_locks"] = _ov
+        else:
+            # ── Flusso originale (piano corrente) ──
+            df = app_data["preassignments"].copy()
+            if not df.empty and "employee_id" in df.columns and "data" in df.columns:
+                mask = (df["employee_id"].astype(str) == eid) & (df["data"] == date_str)
+                df = df[~mask].reset_index(drop=True)
+            if selected != "--":
+                df = pd.concat([df, pd.DataFrame([{
+                    "employee_id": eid, "data": date_str, "state_code": selected,
+                }])], ignore_index=True)
+            st.session_state["data"]["preassignments"] = df
         st.rerun()
+
+    # ── Sezione Lock (solo piano corrente, non in draft mode) ───────────────
+    if not _edit_draft:
+        st.divider()
+        st.markdown("⚠️ **Lock turno** *(vincolo hard — sovrascrive preassegnazione)*")
+
+        # Lista completa per lock: prima domanda (solo quelli con slot), poi non-domanda
+        all_lock_codes = (
+            [s for s in shifts_df["shift_id"].astype(str).unique() if s in demand_shift_ids]
+            + non_demand_codes
+        )
+
+        # Leggi lock attuali per questo dipendente+data
+        locks_df = app_data.get("locks", pd.DataFrame())
+        must_shift: str | None = None
+        forbidden_shifts: list[str] = []
+        must_reparto: str = ""
+        if not locks_df.empty and "lock_type" in locks_df.columns:
+            lmask = (locks_df["employee_id"].astype(str) == eid) & (locks_df["date"] == date_str)
+            emp_locks = locks_df[lmask]
+            must_rows = emp_locks[emp_locks["lock_type"] == "MUST_DO"]
+            if not must_rows.empty:
+                must_shift = str(must_rows.iloc[0]["shift_code"])
+                must_reparto = str(must_rows.iloc[0].get("reparto_id", ""))
+            forbidden_shifts = emp_locks[emp_locks["lock_type"] == "FORBIDDEN"]["shift_code"].tolist()
+
+        # Reparto: "-- qualsiasi --" → state lock; reparto specifico → slot lock (solo domanda)
+        emp_df = app_data["employees"]
+        emp_reparto = ""
+        emp_match = emp_df[emp_df["employee_id"].astype(str) == eid]
+        if not emp_match.empty:
+            emp_reparto = str(emp_match.iloc[0].get("reparto_id", ""))
+        all_reparti = sorted(emp_df["reparto_id"].dropna().unique().tolist())
+        reparto_options = ["-- qualsiasi --"] + all_reparti
+        # Default reparto: quello del lock esistente; "-- qualsiasi --" per non-domanda o assente
+        if must_reparto and must_reparto in all_reparti:
+            _def_rep = must_reparto
+        elif must_shift and must_shift not in demand_shift_ids:
+            _def_rep = "-- qualsiasi --"
+        else:
+            _def_rep = emp_reparto if emp_reparto in all_reparti else "-- qualsiasi --"
+        reparto_sel = st.selectbox(
+            "Reparto", reparto_options,
+            index=reparto_options.index(_def_rep) if _def_rep in reparto_options else 0,
+            key="dlg_lock_reparto",
+            disabled=_is_consolidated,
+        )
+
+        must_options = ["-- nessuno --"] + all_lock_codes
+        must_idx = must_options.index(must_shift) if must_shift in must_options else 0
+        must_sel = st.selectbox("Forza turno (MUST_DO)", must_options, index=must_idx, key="dlg_lock_must", disabled=_is_consolidated)
+
+        # Indicatore tipo di lock
+        if must_sel != "-- nessuno --":
+            if must_sel in demand_shift_ids and reparto_sel != "-- qualsiasi --":
+                st.caption(f"→ lock su **slot** ({must_sel} · reparto {reparto_sel})")
+            elif must_sel in demand_shift_ids:
+                st.caption(f"→ lock su **stato giornaliero** (qualsiasi slot {must_sel})")
+            else:
+                st.caption(f"→ lock su **stato giornaliero** ({must_sel})")
+
+        forbidden_choices = [s for s in all_lock_codes if s != must_sel]
+        forbidden_default = [f for f in forbidden_shifts if f in forbidden_choices]
+        forbidden_sel = st.multiselect(
+            "Vieta turni (FORBIDDEN)", forbidden_choices, default=forbidden_default,
+            key="dlg_lock_forbidden",
+            disabled=_is_consolidated,
+        )
+
+        if st.button("Salva lock", key="dlg_lock_save", disabled=_is_consolidated):
+            # reparto_id vuoto → state lock; valorizzato → slot lock (se domanda)
+            reparto_id_val = "" if reparto_sel == "-- qualsiasi --" else reparto_sel
+            ldf = locks_df.copy() if not locks_df.empty else pd.DataFrame(
+                columns=["employee_id", "date", "reparto_id", "shift_code", "lock_type"]
+            )
+            # Rimuovi lock precedenti per questo dipendente+data
+            if not ldf.empty and "employee_id" in ldf.columns:
+                lmask2 = (ldf["employee_id"].astype(str) == eid) & (ldf["date"] == date_str)
+                ldf = ldf[~lmask2].reset_index(drop=True)
+            # Aggiungi MUST_DO se selezionato
+            if must_sel != "-- nessuno --":
+                ldf = pd.concat([ldf, pd.DataFrame([{
+                    "employee_id": eid, "date": date_str,
+                    "reparto_id": reparto_id_val if must_sel in demand_shift_ids else "",
+                    "shift_code": must_sel, "lock_type": "MUST_DO",
+                }])], ignore_index=True)
+            # Aggiungi FORBIDDEN
+            for fs in forbidden_sel:
+                ldf = pd.concat([ldf, pd.DataFrame([{
+                    "employee_id": eid, "date": date_str,
+                    "reparto_id": reparto_id_val if fs in demand_shift_ids else "",
+                    "shift_code": fs, "lock_type": "FORBIDDEN",
+                }])], ignore_index=True)
+            st.session_state["data"]["locks"] = ldf
+            # Se un turno vietato coincide con la preassegnazione attiva → svuota
+            if forbidden_sel:
+                pa = st.session_state["data"]["preassignments"].copy()
+                if not pa.empty and "employee_id" in pa.columns and "data" in pa.columns:
+                    code_col = next((c for c in ("state_code", "shift_code", "turno") if c in pa.columns), None)
+                    if code_col:
+                        pmask = (
+                            (pa["employee_id"].astype(str) == eid)
+                            & (pa["data"] == date_str)
+                            & (pa[code_col].astype(str).isin(forbidden_sel))
+                        )
+                        if pmask.any():
+                            pa = pa[~pmask].reset_index(drop=True)
+                            st.session_state["data"]["preassignments"] = pa
+            st.rerun()
 
 
 @st.dialog("Dettaglio copertura")
@@ -1707,8 +1824,9 @@ def _grid_section():
         open_dialog = ("det", sel_now)
     elif tb_raw == clear_id:
         st.session_state["_clear_counter"] = clear_counter + 1
-        pa = st.session_state["data"]["preassignments"]
-        st.session_state["data"]["preassignments"] = pa.iloc[0:0].copy()
+        if not st.session_state.get("view_draft"):
+            pa = st.session_state["data"]["preassignments"]
+            st.session_state["data"]["preassignments"] = pa.iloc[0:0].copy()
     elif tb_raw == filtri_id:
         st.session_state["_filtri_counter"] = filtri_counter + 1
         st.session_state["show_filters"] = not st.session_state.get("show_filters", False)
@@ -1765,6 +1883,20 @@ def _grid_section():
         else:
             _merged_pa = _draft["preassignments"]
         _sched_data["preassignments"] = _merged_pa
+        # Rimuovi solo i lock MUST_DO sovrascritti manualmente nella bozza
+        # (i FORBIDDEN restano visibili e attivi)
+        _overrides = _draft.get("overridden_locks", set())
+        if _overrides:
+            _ldf = _sched_data.get("locks", pd.DataFrame())
+            if not _ldf.empty and "employee_id" in _ldf.columns and "date" in _ldf.columns:
+                _ov_mask = (
+                    _ldf.apply(
+                        lambda r: (str(r["employee_id"]), str(r["date"])) in _overrides,
+                        axis=1,
+                    )
+                    & (_ldf["lock_type"] == "MUST_DO")
+                )
+                _sched_data["locks"] = _ldf[~_ov_mask].reset_index(drop=True)
         dates, all_rows = build_schedule(_sched_data)
     else:
         dates, all_rows = build_schedule(data)
@@ -1808,13 +1940,14 @@ def _grid_section():
 
         filtri_cls   = "btn btn-active" if show_filters  else "btn"
         show_cov_cls = "btn btn-active" if show_coverage else "btn"
+        clear_cls    = "btn off" if _view_draft else "btn"
 
         toolbar_html = (
             _TB_CSS +
             f'<div class="tb">'
             f'<a id="{det_id}" href="#" class="{det_cls}">{det_label}</a>'
             '<span class="sep"></span>'
-            f'<a id="{clear_id}" href="#" class="btn">&#128465; Svuota preassegnazioni</a>'
+            f'<a id="{clear_id}" href="#" class="{clear_cls}">&#128465; Svuota preassegnazioni</a>'
             '<span class="sep"></span>'
             '<span class="btn">&Sigma; Mostra accum.</span>'
             f'<a id="{show_cov_id}" href="#" class="{show_cov_cls}">&#128202; Mostra copertura</a>'
@@ -1928,13 +2061,38 @@ if _ottimizza_req:
         _preset_label = next(
             (k for k, v in TIME_PRESETS.items() if v == int(_max_s)), f"{int(_max_s)}s"
         )
-        with st.spinner(f"Ottimizzazione in corso… ({_preset_label})"):
+
+        # ── Warm start: costruisci hint dalla bozza precedente ────────────
+        _warm_df = None
+        _warm_fallback = False
+        if _ottimizza_req.get("use_warm_start"):
+            _prev_draft = st.session_state.get("draft")
+            if _prev_draft is not None:
+                _prev_adf = _prev_draft.get("assignments_df", pd.DataFrame())
+                if (
+                    not _prev_adf.empty
+                    and "employee_id" in _prev_adf.columns
+                    and "slot_id" in _prev_adf.columns
+                ):
+                    _warm_df = _prev_adf[["employee_id", "slot_id"]].copy()
+                    _warm_df["slot_id"] = pd.to_numeric(
+                        _warm_df["slot_id"], errors="coerce"
+                    )
+                    _warm_df = _warm_df.dropna(subset=["employee_id", "slot_id"])
+            if _warm_df is None or _warm_df.empty:
+                _warm_df = None
+                _warm_fallback = True
+
+        _spinner_prefix = "Cerca meglio" if _warm_df is not None else "Ottimizzazione"
+        with st.spinner(f"{_spinner_prefix} in corso… ({_preset_label})"):
             _result = _solve(
                 _loaded,
                 _run_data["cfg"],
                 selected_departments=_ottimizza_req["reparti"] or None,
                 stability_enabled=_ottimizza_req["stability"],
                 max_time_s=_max_s,
+                warm_start_df=_warm_df,
+                warm_start_strict=False,
             )
 
         # Converti states_df → formato preassegnazioni (employee_id, data, state_code)
@@ -1958,6 +2116,27 @@ if _ottimizza_req:
             "kpi":                   _build_draft_kpi_data(_result),
             "infeasibility_summary": _result.infeasibility_summary,
         }
+
+        # ── Feedback warm start ───────────────────────────────────────────
+        _used_ws = _warm_df is not None
+        st.session_state["draft"]["used_warm_start"] = _used_ws
+        _ws_note = ""
+        if _warm_fallback:
+            _ws_note = (
+                "Warm start non disponibile: nessun hint valido dalla bozza. "
+                "Eseguito run normale."
+            )
+        elif _used_ws and _result.warm_start_stats is not None:
+            _ws = _result.warm_start_stats
+            _ws_note = f"Warm start: applicati {_ws.hints_applied} hint"
+            _ws_ignored = (
+                _ws.unknown_slots + _ws.ineligible_pairs + _ws.unknown_employees
+            )
+            if _ws_ignored > 0:
+                _ws_note += f" ({_ws_ignored} ignorati)"
+        if _ws_note:
+            st.session_state["draft"]["warm_start_note"] = _ws_note
+
         st.session_state["view_draft"] = True
 
     except Exception as _exc:
@@ -1982,9 +2161,17 @@ if _draft:
         if _draft["objective_value"] is not None else ""
     )
 
-    _b1, _b2, _b3, _b4 = st.columns([3, 2, 1, 1])
+    _b1, _b2, _b3, _b4, _b5 = st.columns([3, 2, 1, 1, 1])
     with _b1:
         st.info(f"{_status_icon} **Bozza disponibile** — {_draft['status_name']}{_obj_str}")
+        if _draft.get("manually_edited"):
+            st.caption(
+                "La bozza è stata modificata manualmente. "
+                "I KPI potrebbero non riflettere completamente le modifiche."
+            )
+        _ws_note = _draft.get("warm_start_note")
+        if _ws_note:
+            st.caption(_ws_note)
     with _b2:
         _radio_val = st.radio(
             "Vista",
@@ -2022,10 +2209,44 @@ if _draft:
                 st.session_state["data"]["assignments_df"] = _save_adf.copy()
             else:
                 st.session_state["data"].pop("assignments_df", None)
+            # Rimuovi i lock MUST_DO delle celle overridden manualmente
+            _save_overrides = _draft.get("overridden_locks", set())
+            if _save_overrides:
+                _save_locks = st.session_state["data"].get("locks", pd.DataFrame())
+                if (
+                    not _save_locks.empty
+                    and "employee_id" in _save_locks.columns
+                    and "date" in _save_locks.columns
+                    and "lock_type" in _save_locks.columns
+                ):
+                    _rm_mask = (
+                        _save_locks.apply(
+                            lambda r: (str(r["employee_id"]), str(r["date"])) in _save_overrides,
+                            axis=1,
+                        )
+                        & (_save_locks["lock_type"] == "MUST_DO")
+                    )
+                    st.session_state["data"]["locks"] = _save_locks[~_rm_mask].reset_index(drop=True)
             del st.session_state["draft"]
             st.session_state.pop("view_draft", None)
             st.rerun()
     with _b4:
+        if st.button(
+            "Cerca meglio",
+            width="stretch",
+            disabled=not _feasible,
+            help=("Rilancia il solver usando la bozza come punto di partenza"
+                  if _feasible else "Non disponibile: bozza non valida."),
+        ):
+            _cm_params = st.session_state.get("calc_params")
+            if _cm_params and "start" in _cm_params and "time_s" in _cm_params:
+                _cm_params = dict(_cm_params)
+                _cm_params["use_warm_start"] = True
+                st.session_state["_ottimizza_req"] = _cm_params
+                st.rerun()
+            else:
+                st.error("Parametri di calcolo non disponibili. Configura dalla sidebar.")
+    with _b5:
         if st.button("Annulla", width="stretch"):
             del st.session_state["draft"]
             st.session_state.pop("view_draft", None)
