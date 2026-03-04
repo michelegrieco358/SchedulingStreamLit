@@ -6,18 +6,24 @@ from __future__ import annotations
 
 import base64
 import copy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import html as _html
+import io
+import inspect
+import logging
 import math
 from pathlib import Path
 import shutil
 import sys
 import tempfile
+import zipfile
 
 import pandas as pd
 import yaml
 import streamlit as st
 from st_click_detector import click_detector
+
+LOGGER = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -41,7 +47,7 @@ try:
     from src.load_data import load_all_data as _load_all_data
     from src.solve_service import solve_schedule_from_data as _solve
     _SOLVER_AVAILABLE = True
-except Exception:
+except (ImportError, ModuleNotFoundError):
     _SOLVER_AVAILABLE = False
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -66,9 +72,137 @@ FIXED_HOLIDAYS = {
 }
 TIME_PRESETS = {"Veloce (30s)": 30, "Standard (60s)": 60, "Avanzata (300s)": 300}
 
+_DATASET_RESET_KEYS: tuple[str, ...] = (
+    "draft",
+    "view_draft",
+    "draft_view_radio",
+    "grid_selection",
+    "_ottimizza_req",
+    "_cov_dlg_req",
+    "calc_params",
+    "show_coverage",
+    "show_filters",
+    "view_reparto",
+    "view_role",
+    "view_employee",
+    "cov_selection",
+    "_cov_click_counter",
+    "_show_cov_counter",
+    "_filtri_counter",
+    "_det_counter",
+    "_clear_counter",
+)
+
+_DRAFT_ONLY_KEYS: tuple[str, ...] = (
+    "draft",
+    "view_draft",
+    "draft_view_radio",
+)
+
+
+def _clear_session_keys(keys: tuple[str, ...]) -> None:
+    for key in keys:
+        st.session_state.pop(key, None)
+
+
+def _drop_draft_state() -> None:
+    _clear_session_keys(_DRAFT_ONLY_KEYS)
+
+
+def _queue_warm_start_from_calc_params() -> bool:
+    calc_params = st.session_state.get("calc_params")
+    if not _has_valid_calc_params(calc_params):
+        return False
+    next_req = dict(calc_params)
+    next_req["use_warm_start"] = True
+    st.session_state["_ottimizza_req"] = next_req
+    return True
+
+
+def _has_valid_calc_params(calc_params: object) -> bool:
+    required = {"start", "end", "cross", "time_s", "reparti", "stability"}
+    return bool(isinstance(calc_params, dict) and required.issubset(calc_params))
+
+
+def _queue_normal_run_from_calc_params() -> bool:
+    calc_params = st.session_state.get("calc_params")
+    if not _has_valid_calc_params(calc_params):
+        return False
+    next_req = dict(calc_params)
+    next_req["use_warm_start"] = False
+    st.session_state["_ottimizza_req"] = next_req
+    return True
+
+
+def _promote_draft_to_current(draft: dict) -> None:
+    """Promuove la bozza (base2) a piano corrente ufficiale (base1)."""
+    save_start = draft.get("calc_start")
+    save_end = draft.get("calc_end")
+    base2_pa = draft.get("base_preassignments", pd.DataFrame())
+    if save_start and save_end:
+        final_pa = _merge_draft_pa(
+            draft["preassignments"],
+            base2_pa,
+            save_start,
+            save_end,
+        )
+    else:
+        final_pa = draft["preassignments"].copy()
+    st.session_state["data"]["preassignments"] = final_pa
+
+    base2_locks = draft.get("base_locks")
+    if base2_locks is not None:
+        st.session_state["data"]["locks"] = base2_locks.copy()
+    st.session_state["data"]["demand_overrides"] = _normalize_demand_overrides(
+        draft.get("demand_overrides", pd.DataFrame())
+    )
+
+    # assignments_df solver non è affidabile dopo edit manuali.
+    if draft.get("manual_edits", False):
+        st.session_state["data"].pop("assignments_df", None)
+    else:
+        save_adf = draft.get("assignments_df", pd.DataFrame())
+        if not save_adf.empty:
+            st.session_state["data"]["assignments_df"] = save_adf.copy()
+        else:
+            st.session_state["data"].pop("assignments_df", None)
+
+    _drop_draft_state()
+
 
 def _is_holiday(d: date) -> bool:
     return (d.day, d.month) in FIXED_HOLIDAYS
+
+
+def _supports_kwarg(fn, arg: str) -> bool:
+    try:
+        return arg in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _button(label: str, *, width: str | None = None, **kwargs):
+    if width is not None and _supports_kwarg(st.button, "width"):
+        kwargs["width"] = width
+    elif width is not None and _supports_kwarg(st.button, "use_container_width"):
+        kwargs["use_container_width"] = (width == "stretch")
+    return st.button(label, **kwargs)
+
+
+def _download_button(label: str, *, width: str | None = None, **kwargs):
+    if width is not None and _supports_kwarg(st.download_button, "width"):
+        kwargs["width"] = width
+    elif width is not None and _supports_kwarg(st.download_button, "use_container_width"):
+        kwargs["use_container_width"] = (width == "stretch")
+    return st.download_button(label, **kwargs)
+
+
+def _dataframe(data, *, width: str | None = None, **kwargs):
+    if width is not None and _supports_kwarg(st.dataframe, "use_container_width"):
+        kwargs["use_container_width"] = (width == "stretch")
+    elif isinstance(width, int) and _supports_kwarg(st.dataframe, "width"):
+        kwargs["width"] = width
+    return st.dataframe(data, **kwargs)
 
 
 def _hdr_class(d: date) -> str:
@@ -197,6 +331,18 @@ def load_dataset(folder: Path) -> dict:
         "month_plan": month_plan,
         "coverage_groups": coverage_groups,
         "coverage_roles": coverage_roles,
+        "demand_overrides": pd.DataFrame(
+            columns=[
+                "data",
+                "reparto_id",
+                "shift_code",
+                "coverage_code",
+                "gruppo",
+                "total_required",
+                "role",
+                "min_required",
+            ]
+        ),
         "folder": str(folder),
     }
 
@@ -238,6 +384,469 @@ def _normalize_preassignments(pa_df: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def _normalize_locks(locks_df: pd.DataFrame | None) -> pd.DataFrame:
+    cols = ["employee_id", "date", "reparto_id", "shift_code", "lock_type"]
+    if locks_df is None or locks_df.empty:
+        return pd.DataFrame(columns=cols)
+    out = locks_df.copy()
+    for c in cols:
+        if c not in out.columns:
+            out[c] = ""
+    out = out[cols].copy()
+    out["lock_type"] = out["lock_type"].astype(str).str.strip().str.upper()
+    out = out[out["lock_type"].isin(["MUST_DO", "FORBIDDEN"])].reset_index(drop=True)
+    return out
+
+
+def _normalize_demand_overrides(df: pd.DataFrame | None) -> pd.DataFrame:
+    cols = [
+        "data",
+        "reparto_id",
+        "shift_code",
+        "coverage_code",
+        "gruppo",
+        "total_required",
+        "role",
+        "min_required",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+    out = df.copy()
+    for c in cols:
+        if c not in out.columns:
+            out[c] = pd.NA
+    out = out[cols].copy()
+    _dt = pd.to_datetime(out["data"], errors="coerce")
+    out = out[_dt.notna()].copy()
+    out["data"] = _dt[_dt.notna()].dt.date.astype(str)
+    out["reparto_id"] = out["reparto_id"].astype(str).str.strip().str.upper()
+    out["shift_code"] = out["shift_code"].astype(str).str.strip().str.upper()
+    out["coverage_code"] = out["coverage_code"].astype(str).str.strip().str.upper().replace({"<NA>": "", "NAN": ""})
+    # Retrocompatibilità: eventuali override salvati con coverage sintetico OVR_*.
+    out.loc[out["coverage_code"].str.startswith("OVR_", na=False), "coverage_code"] = ""
+    out["gruppo"] = out["gruppo"].astype(str).str.strip().str.upper().replace({"<NA>": "", "NAN": ""})
+    out["role"] = out["role"].astype(str).str.strip().str.upper().replace({"<NA>": "", "NAN": ""})
+    out["total_required"] = pd.to_numeric(out["total_required"], errors="coerce")
+    out["min_required"] = pd.to_numeric(out["min_required"], errors="coerce")
+    out = out[out["data"].notna() & (out["reparto_id"] != "") & (out["shift_code"] != "")]
+    group_mask = out["total_required"].notna()
+    role_mask = out["min_required"].notna()
+    group_rows = out[group_mask].copy()
+    role_rows = out[role_mask].copy()
+    if not group_rows.empty:
+        group_rows["total_required"] = group_rows["total_required"].fillna(0).astype(int).clip(lower=0)
+        group_rows["min_required"] = pd.NA
+        group_rows["role"] = ""
+        group_rows = group_rows.drop_duplicates(
+            subset=["data", "reparto_id", "shift_code", "coverage_code", "gruppo"],
+            keep="last",
+        )
+    if not role_rows.empty:
+        role_rows["min_required"] = role_rows["min_required"].fillna(0).astype(int).clip(lower=0)
+        role_rows["total_required"] = pd.NA
+        role_rows = role_rows[role_rows["role"] != ""]
+        role_rows = role_rows.drop_duplicates(
+            subset=["data", "reparto_id", "shift_code", "coverage_code", "gruppo", "role"],
+            keep="last",
+        )
+    out = pd.concat([group_rows, role_rows], ignore_index=True)
+    return out.reset_index(drop=True)
+
+
+def _get_demand_overrides_target() -> tuple[str, pd.DataFrame]:
+    draft = st.session_state.get("draft")
+    if st.session_state.get("view_draft", False) and isinstance(draft, dict):
+        return "draft", _normalize_demand_overrides(draft.get("demand_overrides", pd.DataFrame()))
+    data = st.session_state.get("data", {})
+    return "data", _normalize_demand_overrides(data.get("demand_overrides", pd.DataFrame()))
+
+
+def _set_demand_overrides_target(target: str, overrides_df: pd.DataFrame) -> None:
+    normalized = _normalize_demand_overrides(overrides_df)
+    if target == "draft":
+        st.session_state["draft"]["demand_overrides"] = normalized
+        st.session_state["draft"]["manual_edits"] = True
+    else:
+        st.session_state["data"]["demand_overrides"] = normalized
+
+
+def _upsert_group_override(
+    overrides_df: pd.DataFrame,
+    *,
+    data_s: str,
+    reparto_id: str,
+    shift_code: str,
+    coverage_code: str,
+    gruppo: str,
+    total_required: int,
+) -> pd.DataFrame:
+    out = _normalize_demand_overrides(overrides_df)
+    cov_opts = [coverage_code, ""]
+    mask = (
+        (out["data"] == data_s)
+        & (out["reparto_id"] == reparto_id)
+        & (out["shift_code"] == shift_code)
+        & (out["coverage_code"].isin(cov_opts))
+        & (out["gruppo"] == gruppo)
+        & (out["total_required"].notna())
+    )
+    out = out[~mask].reset_index(drop=True)
+    row = {
+        "data": data_s,
+        "reparto_id": reparto_id,
+        "shift_code": shift_code,
+        "coverage_code": coverage_code,
+        "gruppo": gruppo,
+        "total_required": int(total_required),
+        "role": "",
+        "min_required": pd.NA,
+    }
+    return _normalize_demand_overrides(pd.concat([out, pd.DataFrame([row])], ignore_index=True))
+
+
+def _clear_group_override(
+    overrides_df: pd.DataFrame,
+    *,
+    data_s: str,
+    reparto_id: str,
+    shift_code: str,
+    coverage_code: str,
+    gruppo: str,
+) -> pd.DataFrame:
+    out = _normalize_demand_overrides(overrides_df)
+    cov_opts = [coverage_code, ""]
+    mask = (
+        (out["data"] == data_s)
+        & (out["reparto_id"] == reparto_id)
+        & (out["shift_code"] == shift_code)
+        & (out["coverage_code"].isin(cov_opts))
+        & (out["gruppo"] == gruppo)
+        & (out["total_required"].notna())
+    )
+    return out[~mask].reset_index(drop=True)
+
+
+def _upsert_role_override(
+    overrides_df: pd.DataFrame,
+    *,
+    data_s: str,
+    reparto_id: str,
+    shift_code: str,
+    coverage_code: str,
+    gruppo: str,
+    role: str,
+    min_required: int,
+) -> pd.DataFrame:
+    out = _normalize_demand_overrides(overrides_df)
+    cov_opts = [coverage_code, ""]
+    mask = (
+        (out["data"] == data_s)
+        & (out["reparto_id"] == reparto_id)
+        & (out["shift_code"] == shift_code)
+        & (out["coverage_code"].isin(cov_opts))
+        & (out["gruppo"] == gruppo)
+        & (out["role"] == role)
+        & (out["min_required"].notna())
+    )
+    out = out[~mask].reset_index(drop=True)
+    row = {
+        "data": data_s,
+        "reparto_id": reparto_id,
+        "shift_code": shift_code,
+        "coverage_code": coverage_code,
+        "gruppo": gruppo,
+        "total_required": pd.NA,
+        "role": role,
+        "min_required": int(min_required),
+    }
+    return _normalize_demand_overrides(pd.concat([out, pd.DataFrame([row])], ignore_index=True))
+
+
+def _clear_role_override(
+    overrides_df: pd.DataFrame,
+    *,
+    data_s: str,
+    reparto_id: str,
+    shift_code: str,
+    coverage_code: str,
+    gruppo: str,
+    role: str,
+) -> pd.DataFrame:
+    out = _normalize_demand_overrides(overrides_df)
+    cov_opts = [coverage_code, ""]
+    mask = (
+        (out["data"] == data_s)
+        & (out["reparto_id"] == reparto_id)
+        & (out["shift_code"] == shift_code)
+        & (out["coverage_code"].isin(cov_opts))
+        & (out["gruppo"] == gruppo)
+        & (out["role"] == role)
+        & (out["min_required"].notna())
+    )
+    return out[~mask].reset_index(drop=True)
+
+
+def _distribute_total(original: list[int], target: int) -> list[int]:
+    if not original:
+        return []
+    target = max(0, int(target))
+    if len(original) == 1:
+        return [target]
+    base_sum = sum(max(0, int(v)) for v in original)
+    if base_sum <= 0:
+        out = [0] * len(original)
+        out[0] = target
+        return out
+    raw = [max(0.0, float(v)) * target / base_sum for v in original]
+    floor = [int(x) for x in raw]
+    remainder = target - sum(floor)
+    frac_idx = sorted(
+        range(len(raw)),
+        key=lambda i: (raw[i] - floor[i]),
+        reverse=True,
+    )
+    for i in frac_idx[:max(0, remainder)]:
+        floor[i] += 1
+    return floor
+
+
+def _apply_demand_overrides_tables(
+    month_plan: pd.DataFrame,
+    coverage_groups: pd.DataFrame,
+    coverage_roles: pd.DataFrame,
+    overrides_df: pd.DataFrame | None,
+    *,
+    include_base_coverage: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
+    overrides = _normalize_demand_overrides(overrides_df)
+    if overrides.empty or month_plan.empty or coverage_groups.empty:
+        return month_plan, coverage_groups, coverage_roles, []
+
+    mp = month_plan.copy()
+    cg = coverage_groups.copy()
+    cr = coverage_roles.copy()
+    warnings_list: list[str] = []
+
+    # Normalize lookup columns.
+    for df, cols in (
+        (mp, ["data", "reparto_id", "shift_code", "coverage_code"]),
+        (cg, ["coverage_code", "reparto_id", "shift_code", "gruppo"]),
+        (cr, ["coverage_code", "reparto_id", "shift_code", "gruppo"]),
+    ):
+        for col in cols:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip().str.upper()
+    if "data" in mp.columns:
+        mp["data"] = pd.to_datetime(mp["data"], errors="coerce").dt.date.astype(str)
+    if include_base_coverage:
+        mp["base_coverage_code"] = mp["coverage_code"].astype(str).str.strip().str.upper()
+
+    cg["total_staff"] = pd.to_numeric(cg.get("total_staff"), errors="coerce").fillna(0).astype(int)
+    if "min_ruolo" in cr.columns:
+        cr["min_ruolo"] = pd.to_numeric(cr["min_ruolo"], errors="coerce").fillna(0).astype(int)
+    role_col = "role" if "role" in cr.columns else ("ruolo" if "ruolo" in cr.columns else None)
+    if role_col:
+        cr["_role_norm"] = cr[role_col].astype(str).str.strip().str.upper()
+
+    new_cg_rows: list[dict] = []
+    new_cr_rows: list[dict] = []
+
+    by_cell = overrides.groupby(["data", "reparto_id", "shift_code"], dropna=False)
+    for (ds, rep, sh), ovr_cell in by_cell:
+        ds = str(ds).upper()
+        rep = str(rep).upper()
+        sh = str(sh).upper()
+        mp_mask = (mp["data"] == ds) & (mp["reparto_id"] == rep) & (mp["shift_code"] == sh)
+        if not mp_mask.any():
+            warnings_list.append(f"Override ignorato: nessun month_plan per {ds} {rep} {sh}.")
+            continue
+
+        cell_groups = ovr_cell[ovr_cell["total_required"].notna()].copy()
+        cell_roles = ovr_cell[ovr_cell["min_required"].notna()].copy()
+        per_group_total: dict[str, int] = {}
+        if not cell_groups.empty:
+            for _, g in cell_groups.iterrows():
+                gr = str(g.get("gruppo", "")).strip().upper()
+                cov = str(g.get("coverage_code", "")).strip().upper()
+                per_group_total[(cov, gr)] = int(g["total_required"])
+        per_role_min: dict[tuple[str, str], int] = {}
+        if not cell_roles.empty:
+            for _, r in cell_roles.iterrows():
+                gr = str(r.get("gruppo", "")).strip().upper()
+                rl = str(r.get("role", "")).strip().upper()
+                if not rl:
+                    continue
+                cov = str(r.get("coverage_code", "")).strip().upper()
+                per_role_min[(cov, gr, rl)] = int(r["min_required"])
+
+        for mp_idx in mp.index[mp_mask]:
+            old_cov = str(mp.at[mp_idx, "coverage_code"])
+            base_cov = (
+                str(mp.at[mp_idx, "base_coverage_code"])
+                if include_base_coverage and "base_coverage_code" in mp.columns
+                else old_cov
+            )
+            gmask = (
+                (cg["coverage_code"] == base_cov)
+                & (cg["reparto_id"] == rep)
+                & (cg["shift_code"] == sh)
+            )
+            grows = cg[gmask].copy()
+            if grows.empty:
+                warnings_list.append(
+                    f"Override ignorato: nessun coverage_group per {ds} {rep} {sh} ({base_cov})."
+                )
+                continue
+
+            new_cov = f"OVR_{ds.replace('-', '')}_{rep}_{sh}_{mp_idx}".upper()
+
+            if per_group_total:
+                for gidx in grows.index:
+                    gr = str(grows.at[gidx, "gruppo"]).strip().upper()
+                    key_exact = (base_cov, gr)
+                    key_wild = ("", gr)
+                    if key_exact in per_group_total:
+                        grows.at[gidx, "total_staff"] = int(per_group_total[key_exact])
+                    elif key_wild in per_group_total:
+                        grows.at[gidx, "total_staff"] = int(per_group_total[key_wild])
+
+            for _, grow in grows.iterrows():
+                ng = grow.to_dict()
+                ng["coverage_code"] = new_cov
+                ng["total_staff"] = int(ng["total_staff"])
+                new_cg_rows.append(ng)
+
+            if cr.empty:
+                mp.at[mp_idx, "coverage_code"] = new_cov
+                continue
+
+            for _, grow in grows.iterrows():
+                gruppo = str(grow.get("gruppo", "")).strip().upper()
+                gtot = int(grow.get("total_staff", 0))
+                rmask = (
+                    (cr["coverage_code"] == base_cov)
+                    & (cr["reparto_id"] == rep)
+                    & (cr["shift_code"] == sh)
+                )
+                if "gruppo" in cr.columns:
+                    rmask = rmask & (cr["gruppo"].astype(str).str.strip().str.upper() == gruppo)
+                rrows = cr[rmask].copy()
+                if rrows.empty:
+                    continue
+
+                role_override_pairs = {
+                    (cov, g, r)
+                    for (cov, g, r) in per_role_min
+                    if g == gruppo and cov in ("", base_cov)
+                }
+                if role_override_pairs and role_col:
+                    for ridx in rrows.index:
+                        role_norm = str(rrows.at[ridx, "_role_norm"]).strip().upper()
+                        key_exact = (base_cov, gruppo, role_norm)
+                        key_wild = ("", gruppo, role_norm)
+                        if key_exact in per_role_min:
+                            rrows.at[ridx, "min_ruolo"] = int(per_role_min[key_exact])
+                        elif key_wild in per_role_min:
+                            rrows.at[ridx, "min_ruolo"] = int(per_role_min[key_wild])
+
+                for _, rrow in rrows.iterrows():
+                    nr = rrow.to_dict()
+                    nr["coverage_code"] = new_cov
+                    if "min_ruolo" in nr:
+                        nr["min_ruolo"] = int(nr["min_ruolo"])
+                    nr.pop("_role_norm", None)
+                    new_cr_rows.append(nr)
+
+            mp.at[mp_idx, "coverage_code"] = new_cov
+
+    if new_cg_rows:
+        cg = pd.concat(
+            [
+                cg[~cg["coverage_code"].str.startswith("OVR_", na=False)],
+                pd.DataFrame(new_cg_rows),
+            ],
+            ignore_index=True,
+        )
+    if new_cr_rows:
+        cr = pd.concat(
+            [
+                cr[~cr["coverage_code"].str.startswith("OVR_", na=False)],
+                pd.DataFrame(new_cr_rows),
+            ],
+            ignore_index=True,
+        )
+    if "_role_norm" in cr.columns:
+        cr = cr.drop(columns=["_role_norm"])
+
+    return mp, cg, cr, warnings_list
+
+
+def _build_export_zip_bytes(
+    *,
+    preassignments_df: pd.DataFrame,
+    locks_df: pd.DataFrame,
+    assignments_df: pd.DataFrame | None,
+    demand_overrides_df: pd.DataFrame | None,
+    kind: str,
+) -> bytes:
+    pa_out = _normalize_preassignments(preassignments_df)
+    locks_out = _normalize_locks(locks_df)
+    over_out = _normalize_demand_overrides(demand_overrides_df)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("preassignments.csv", pa_out.to_csv(index=False))
+        zf.writestr("locks.csv", locks_out.to_csv(index=False))
+        zf.writestr("demand_overrides.csv", over_out.to_csv(index=False))
+        if assignments_df is not None and not assignments_df.empty:
+            zf.writestr("assignments_df.csv", assignments_df.to_csv(index=False))
+        zf.writestr(
+            "README.txt",
+            (
+                f"Export type: {kind}\n"
+                f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            ),
+        )
+    return buf.getvalue()
+
+
+def _build_current_export_zip(data: dict) -> bytes:
+    return _build_export_zip_bytes(
+        preassignments_df=data.get("preassignments", pd.DataFrame()),
+        locks_df=data.get("locks", pd.DataFrame()),
+        assignments_df=data.get("assignments_df", pd.DataFrame()),
+        demand_overrides_df=data.get("demand_overrides", pd.DataFrame()),
+        kind="current",
+    )
+
+
+def _build_draft_export_zip(draft: dict) -> bytes:
+    save_start = draft.get("calc_start")
+    save_end = draft.get("calc_end")
+    base2_pa = draft.get("base_preassignments", pd.DataFrame())
+    if save_start and save_end:
+        final_pa = _merge_draft_pa(
+            draft.get("preassignments", pd.DataFrame()),
+            base2_pa,
+            save_start,
+            save_end,
+        )
+    else:
+        final_pa = draft.get("preassignments", pd.DataFrame()).copy()
+
+    assignments_df = None
+    if not draft.get("manual_edits", False):
+        assignments_df = draft.get("assignments_df", pd.DataFrame())
+
+    return _build_export_zip_bytes(
+        preassignments_df=final_pa,
+        locks_df=draft.get("base_locks", pd.DataFrame()),
+        assignments_df=assignments_df,
+        demand_overrides_df=draft.get("demand_overrides", pd.DataFrame()),
+        kind="draft",
+    )
+
+
 def _merge_draft_pa(
     draft_pa: pd.DataFrame,
     current_pa: pd.DataFrame,
@@ -268,6 +877,45 @@ def _merge_draft_pa(
     else:
         outside = pd.DataFrame(columns=["employee_id", "data", "state_code"])
     return pd.concat([draft_pa, outside], ignore_index=True)
+
+
+def _build_state_lookup(pa_df: pd.DataFrame) -> dict[tuple[str, str], str]:
+    norm = _normalize_preassignments(pa_df)
+    if norm.empty:
+        return {}
+    return {
+        (str(r["employee_id"]), str(pd.Timestamp(r["data"]).date())): str(r["state_code"]).strip().upper()
+        for _, r in norm.iterrows()
+    }
+
+
+def _compute_schedule_diff(
+    baseline_pa: pd.DataFrame,
+    draft_pa: pd.DataFrame,
+) -> pd.DataFrame:
+    base_lu = _build_state_lookup(baseline_pa)
+    draft_lu = _build_state_lookup(draft_pa)
+    keys = sorted(set(base_lu.keys()) | set(draft_lu.keys()))
+    rows: list[dict] = []
+    for eid, ds in keys:
+        old = base_lu.get((eid, ds), "--")
+        new = draft_lu.get((eid, ds), "--")
+        if old != new:
+            rows.append({"employee_id": eid, "data": ds, "from_state": old, "to_state": new})
+    return pd.DataFrame(rows, columns=["employee_id", "data", "from_state", "to_state"])
+
+
+def _coverage_shortage_summary(cov_data: dict) -> dict[str, int]:
+    uncovered_cells = 0
+    total_shortage = 0
+    for _, cell in cov_data.items():
+        if cell.get("status") == "N":
+            uncovered_cells += 1
+        for d in cell.get("details", []):
+            req = int(d.get("total_required", 0))
+            pres = int(d.get("total_present", 0))
+            total_shortage += max(0, req - pres)
+    return {"uncovered_cells": uncovered_cells, "total_shortage": total_shortage}
 
 
 def _build_draft_kpi_data(result) -> dict:
@@ -333,10 +981,37 @@ def _build_draft_kpi_data(result) -> dict:
             eid = emp_of.get(emp_idx, str(emp_idx))
             final_balance[str(eid)] = solver.Value(var) / 60.0
         kpi["final_balance_by_emp"] = final_balance
-    except Exception:
+    except (AttributeError, KeyError, TypeError, ValueError):
         kpi["final_balance_by_emp"] = {}
 
     return kpi
+
+
+def _store_new_draft(
+    *,
+    draft_pa: pd.DataFrame,
+    result,
+    ottimizza_req: dict,
+    base2_pa: pd.DataFrame,
+    base2_locks: pd.DataFrame,
+    demand_overrides: pd.DataFrame,
+) -> None:
+    st.session_state["draft"] = {
+        "preassignments": draft_pa,
+        "status_name": result.status_name,
+        "objective_value": result.objective_value,
+        "calc_start": ottimizza_req["start"],
+        "calc_end": ottimizza_req["end"],
+        "assignments_df": result.assignments_df.copy(),
+        "kpi": _build_draft_kpi_data(result),
+        "infeasibility_summary": result.infeasibility_summary,
+        "base_preassignments": base2_pa,
+        "base_locks": base2_locks,
+        "demand_overrides": _normalize_demand_overrides(demand_overrides),
+        "manual_edits": False,
+        "edited_cells": {},
+    }
+    st.session_state["view_draft"] = True
 
 
 def prepare_run_folder(data: dict) -> Path:
@@ -345,6 +1020,9 @@ def prepare_run_folder(data: dict) -> Path:
     Copia i file statici dalla cartella originale del dataset e sovrascrive
     quelli che la UI può aver modificato in memoria:
       - employees.csv      ← data["employees"]
+      - month_plan.csv     ← data["month_plan"] (runtime, include override domanda)
+      - coverage_groups.csv← data["coverage_groups"] (runtime, include override domanda)
+      - coverage_roles.csv ← data["coverage_roles"] (runtime, include override domanda)
       - preassignments.csv ← data["preassignments"] (normalizzato)
       - locks.csv          ← data["locks"] (se non vuoto)
     Nota: config.yaml NON viene scritto qui — load_all_data riceve data["cfg"]
@@ -381,13 +1059,23 @@ def prepare_run_folder(data: dict) -> Path:
         emp_df = data["employees"].copy()
         emp_df.to_csv(tmp_dir / "employees.csv", index=False)
 
-        # ── 3. preassignments.csv — normalizzato e scritto sempre ─────────────
+        # ── 3. month/coverage tables — sovrascrive working copy runtime ──────
+        for key, fname in (
+            ("month_plan", "month_plan.csv"),
+            ("coverage_groups", "coverage_groups.csv"),
+            ("coverage_roles", "coverage_roles.csv"),
+        ):
+            df = data.get(key, pd.DataFrame())
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                df.to_csv(tmp_dir / fname, index=False)
+
+        # ── 4. preassignments.csv — normalizzato e scritto sempre ─────────────
         #    Se vuoto il loader lo ignora; scrivere il file garantisce che
         #    eventuali preassegnazioni della sessione precedente non persistano.
         pa_out = _normalize_preassignments(data.get("preassignments"))
         pa_out.to_csv(tmp_dir / "preassignments.csv", index=False)
 
-        # ── 4. locks.csv — sovrascrive solo se ci sono lock attivi ───────────
+        # ── 5. locks.csv — sovrascrive solo se ci sono lock attivi ───────────
         locks_df = data.get("locks", pd.DataFrame())
         if not locks_df.empty and "lock_type" in locks_df.columns:
             # Formato state-based: employee_id, date, reparto_id, shift_code, lock_type
@@ -400,14 +1088,24 @@ def prepare_run_folder(data: dict) -> Path:
             if stale.exists():
                 stale.unlink()
 
-        # ── 5. holidays.csv — crea file vuoto se assente ─────────────────────
+        # ── 6. holidays.csv — crea file vuoto se assente ─────────────────────
         #    Il loader classifica i giorni festivi da questo file; se mancante
         #    in alcuni dataset (July/August), lo creiamo vuoto con l'header.
         hol_path = tmp_dir / "holidays.csv"
         if not hol_path.exists():
             pd.DataFrame(columns=["data", "descrizione"]).to_csv(hol_path, index=False)
 
-    except Exception:
+    except (
+        OSError,
+        IOError,
+        ValueError,
+        TypeError,
+        KeyError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+        yaml.YAMLError,
+        RuntimeError,
+    ):
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
@@ -774,23 +1472,25 @@ with st.sidebar:
         if custom_path:
             dataset_folder = Path(custom_path)
 
-    if st.button("Carica", type="primary", width="stretch"):
+    if _button("Carica", type="primary", width="stretch"):
         if dataset_folder and dataset_folder.exists():
             try:
                 st.session_state["data"] = load_dataset(dataset_folder)
                 st.session_state["loaded"] = True
-                # Pulisci stato sessione del dataset precedente
-                for _stale_key in (
-                    "draft", "view_draft", "grid_selection",
-                    "_ottimizza_req", "_cov_dlg_req",
-                    "calc_params", "show_coverage", "show_filters",
-                    "view_reparto", "view_role", "view_employee",
-                    "cov_selection", "_cov_click_counter",
-                    "_show_cov_counter", "_filtri_counter",
-                    "_det_counter", "_clear_counter",
-                ):
-                    st.session_state.pop(_stale_key, None)
-            except Exception as e:
+                # Pulisci stato sessione del dataset precedente.
+                _clear_session_keys(_DATASET_RESET_KEYS)
+            except (
+                OSError,
+                IOError,
+                ValueError,
+                TypeError,
+                KeyError,
+                pd.errors.ParserError,
+                pd.errors.EmptyDataError,
+                yaml.YAMLError,
+                RuntimeError,
+            ) as e:
+                LOGGER.exception("Errore durante il caricamento dataset: %s", dataset_folder)
                 st.error(str(e))
         else:
             st.error("Cartella non trovata")
@@ -963,8 +1663,8 @@ with st.sidebar:
 
             # ── Applica ───────────────────────────────────────────────────────
             st.divider()
-            if st.button("Applica configurazione", key="cfg_adv_apply",
-                         width="stretch"):
+            if _button("Applica configurazione", key="cfg_adv_apply",
+                       width="stretch"):
                 _c = copy.deepcopy(st.session_state["data"]["cfg"])
                 _c.setdefault("rest_rules", {})["min_between_shifts_h"] = (
                     st.session_state["cfg_rest_min_between_h"]
@@ -1031,14 +1731,14 @@ with st.sidebar:
             st.caption(f"⚠️ {_date_error}")
 
         if not _SOLVER_AVAILABLE:
-            st.button(
+            _button(
                 "ESEGUI OTTIMIZZAZIONE",
                 type="primary",
                 width="stretch",
                 disabled=True,
             )
             st.caption("⚠️ Modulo solver non disponibile (dipendenze mancanti).")
-        elif st.button(
+        elif _button(
             "ESEGUI OTTIMIZZAZIONE",
             type="primary",
             width="stretch",
@@ -1046,7 +1746,8 @@ with st.sidebar:
         ):
             # Pattern "request": imposta il flag e lascia che il main area
             # processi il run con lo spinner centrato nella pagina principale.
-            st.session_state["_ottimizza_req"] = dict(st.session_state["calc_params"])
+            if not _queue_normal_run_from_calc_params():
+                st.error("Parametri di calcolo non validi.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1176,6 +1877,14 @@ def compute_coverage_preview(
     cg_df = data.get("coverage_groups", pd.DataFrame())
     cr_df = data.get("coverage_roles", pd.DataFrame())
 
+    mp_df, cg_df, cr_df, _ = _apply_demand_overrides_tables(
+        mp_df,
+        cg_df,
+        cr_df,
+        data.get("demand_overrides", pd.DataFrame()),
+        include_base_coverage=True,
+    )
+
     if mp_df.empty or cg_df.empty:
         return {}
 
@@ -1281,6 +1990,7 @@ def compute_coverage_preview(
 
             result[cell_key]["details"].append({
                 "shift_code": shift,
+                "coverage_code": str(plan_row.get("base_coverage_code", cov_code)).strip().upper(),
                 "gruppo": gruppo,
                 "total_required": total_req,
                 "total_present": group_present,
@@ -1381,7 +2091,7 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
         if _cs:
             try:
                 _is_consolidated = pd.Timestamp(date_str).date() < pd.Timestamp(_cs).date()
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
     # ── Flag: siamo in vista draft (non consolidata)? ────────────────────
@@ -1715,6 +2425,7 @@ def _show_day_dialog(payload: dict, app_data: dict) -> None:
 @st.dialog("Dettaglio copertura")
 def _show_cov_dialog(payload: dict, app_data: dict) -> None:
     from collections import defaultdict
+
     reparto = payload["reparto"]
     date_str = payload["date"]
     cov_d = payload["cov_data"]
@@ -1722,13 +2433,24 @@ def _show_cov_dialog(payload: dict, app_data: dict) -> None:
     if not cell:
         st.info("Nessun fabbisogno per questo reparto in questa data.")
         return
+
     by_shift: dict[str, list] = defaultdict(list)
     for d in cell["details"]:
         by_shift[d["shift_code"]].append(d)
+
+    target_name, overrides_df = _get_demand_overrides_target()
+    ds = str(pd.Timestamp(date_str).date())
+    rep = str(reparto).strip().upper()
+
+    st.caption("Override puntuale su questa cella: totale gruppo e minimo ruolo.")
+    if target_name == "draft":
+        st.caption("Stai modificando la bozza corrente.")
+
     for shift, groups in by_shift.items():
-        st.markdown(f"**Turno {shift}**")
+        shift_norm = str(shift).strip().upper()
+        st.markdown(f"**Turno {shift_norm}**")
         for grp in groups:
-            icon = "✓" if grp["total_ok"] else "✗"
+            icon = "S" if grp["total_ok"] else "N"
             color = "#155724" if grp["total_ok"] else "#721c24"
             st.markdown(
                 f'<div style="margin-left:10px;color:{color};font-size:0.9rem;">'
@@ -1736,17 +2458,143 @@ def _show_cov_dialog(payload: dict, app_data: dict) -> None:
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+            gruppo = str(grp.get("gruppo", "")).strip().upper()
+            cov_code = str(grp.get("coverage_code", "")).strip().upper()
+            key_base = (
+                f"{rep}_{ds}_{shift_norm}_{cov_code}_{gruppo}"
+                .replace("-", "_")
+                .replace(" ", "_")
+            )
+            gmask = (
+                (overrides_df["data"] == ds)
+                & (overrides_df["reparto_id"] == rep)
+                & (overrides_df["shift_code"] == shift_norm)
+                & (overrides_df["coverage_code"] == cov_code)
+                & (overrides_df["gruppo"] == gruppo)
+                & (overrides_df["total_required"].notna())
+            )
+            if not gmask.any():
+                gmask = (
+                    (overrides_df["data"] == ds)
+                    & (overrides_df["reparto_id"] == rep)
+                    & (overrides_df["shift_code"] == shift_norm)
+                    & (overrides_df["coverage_code"] == "")
+                    & (overrides_df["gruppo"] == gruppo)
+                    & (overrides_df["total_required"].notna())
+                )
+            gcur = int(grp["total_required"])
+            if gmask.any():
+                gcur = int(overrides_df.loc[gmask, "total_required"].iloc[-1])
+
+            gcol1, gcol2, gcol3 = st.columns([2, 1, 1])
+            with gcol1:
+                gnew = st.number_input(
+                    f"Totale gruppo {gruppo or '(default)'}",
+                    min_value=0,
+                    step=1,
+                    value=int(gcur),
+                    key=f"ovr_g_total_{key_base}",
+                )
+            with gcol2:
+                if _button("Salva totale", key=f"ovr_g_save_{key_base}", width="stretch"):
+                    out = _upsert_group_override(
+                        overrides_df,
+                        data_s=ds,
+                        reparto_id=rep,
+                        shift_code=shift_norm,
+                        coverage_code=cov_code,
+                        gruppo=gruppo,
+                        total_required=int(gnew),
+                    )
+                    _set_demand_overrides_target(target_name, out)
+                    st.rerun()
+            with gcol3:
+                if _button("Rimuovi", key=f"ovr_g_rm_{key_base}", width="stretch"):
+                    out = _clear_group_override(
+                        overrides_df,
+                        data_s=ds,
+                        reparto_id=rep,
+                        shift_code=shift_norm,
+                        coverage_code=cov_code,
+                        gruppo=gruppo,
+                    )
+                    _set_demand_overrides_target(target_name, out)
+                    st.rerun()
+
             for rd in grp["roles"]:
-                if rd["min_required"] == 0:
-                    continue
-                ri = "✓" if rd["ok"] else "✗"
+                role = str(rd["role"]).strip().upper()
+                ri = "S" if rd["ok"] else "N"
                 rc = "#155724" if rd["ok"] else "#721c24"
                 st.markdown(
                     f'<div style="margin-left:24px;color:{rc};font-size:0.85rem;">'
-                    f'{ri} {rd["role"]} &nbsp; {rd["present"]} / {rd["min_required"]}'
+                    f'{ri} {role} &nbsp; {rd["present"]} / {rd["min_required"]}'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+                rmask = (
+                    (overrides_df["data"] == ds)
+                    & (overrides_df["reparto_id"] == rep)
+                    & (overrides_df["shift_code"] == shift_norm)
+                    & (overrides_df["coverage_code"] == cov_code)
+                    & (overrides_df["gruppo"] == gruppo)
+                    & (overrides_df["role"] == role)
+                    & (overrides_df["min_required"].notna())
+                )
+                if not rmask.any():
+                    rmask = (
+                        (overrides_df["data"] == ds)
+                        & (overrides_df["reparto_id"] == rep)
+                        & (overrides_df["shift_code"] == shift_norm)
+                        & (overrides_df["coverage_code"] == "")
+                        & (overrides_df["gruppo"] == gruppo)
+                        & (overrides_df["role"] == role)
+                        & (overrides_df["min_required"].notna())
+                    )
+                rcur = int(rd["min_required"])
+                if rmask.any():
+                    rcur = int(overrides_df.loc[rmask, "min_required"].iloc[-1])
+                role_base = (
+                    f"{key_base}_{role}"
+                    .replace("-", "_")
+                    .replace(" ", "_")
+                )
+                rcol1, rcol2, rcol3 = st.columns([2, 1, 1])
+                with rcol1:
+                    rnew = st.number_input(
+                        f"Minimo ruolo {role}",
+                        min_value=0,
+                        step=1,
+                        value=int(rcur),
+                        key=f"ovr_r_min_{role_base}",
+                    )
+                with rcol2:
+                    if _button("Salva minimo", key=f"ovr_r_save_{role_base}", width="stretch"):
+                        out = _upsert_role_override(
+                            overrides_df,
+                            data_s=ds,
+                            reparto_id=rep,
+                            shift_code=shift_norm,
+                            coverage_code=cov_code,
+                            gruppo=gruppo,
+                            role=role,
+                            min_required=int(rnew),
+                        )
+                        _set_demand_overrides_target(target_name, out)
+                        st.rerun()
+                with rcol3:
+                    if _button("Rimuovi", key=f"ovr_r_rm_{role_base}", width="stretch"):
+                        out = _clear_role_override(
+                            overrides_df,
+                            data_s=ds,
+                            reparto_id=rep,
+                            shift_code=shift_norm,
+                            coverage_code=cov_code,
+                            gruppo=gruppo,
+                            role=role,
+                        )
+                        _set_demand_overrides_target(target_name, out)
+                        st.rerun()
 
 
 # ── Toolbar + Grid (fragment: cell clicks only rerun this section) ────────
@@ -1794,6 +2642,38 @@ def _render_kpi_tab(draft: dict, data: dict) -> None:
 
     emp_df = data.get("employees", pd.DataFrame())
     n_total = len(emp_df)
+    base2_pa = draft.get("base_preassignments", pd.DataFrame())
+    d_start = draft.get("calc_start")
+    d_end = draft.get("calc_end")
+    if d_start and d_end:
+        draft_pa_full = _merge_draft_pa(
+            draft.get("preassignments", pd.DataFrame()),
+            base2_pa,
+            d_start,
+            d_end,
+        )
+    else:
+        draft_pa_full = draft.get("preassignments", pd.DataFrame()).copy()
+    diff_df = _compute_schedule_diff(base2_pa, draft_pa_full)
+
+    base_cov_data = dict(data)
+    base_cov_data["preassignments"] = _normalize_preassignments(base2_pa)
+    base_cov_data["locks"] = draft.get("base_locks", data.get("locks", pd.DataFrame()))
+    base_cov_data["demand_overrides"] = draft.get(
+        "demand_overrides", data.get("demand_overrides", pd.DataFrame())
+    )
+    _, base_rows = build_schedule(base_cov_data)
+    base_cov = compute_coverage_preview(base_cov_data, base_rows, assignments_df=data.get("assignments_df"))
+
+    draft_cov_data = dict(base_cov_data)
+    draft_cov_data["preassignments"] = draft_pa_full
+    draft_cov = compute_coverage_preview(
+        draft_cov_data,
+        base_rows,
+        assignments_df=draft.get("assignments_df"),
+    )
+    base_cov_sum = _coverage_shortage_summary(base_cov)
+    draft_cov_sum = _coverage_shortage_summary(draft_cov)
 
     # ── Riga 1: copertura + ottimo ────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
@@ -1823,6 +2703,23 @@ def _render_kpi_tab(draft: dict, data: dict) -> None:
             f"{n_plan} / {n_total}",
             help="Dipendenti con almeno un turno assegnato nella finestra",
         )
+
+    st.divider()
+
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        st.metric("Turni cambiati", len(diff_df))
+    with d2:
+        delta_cells = draft_cov_sum["uncovered_cells"] - base_cov_sum["uncovered_cells"]
+        st.metric("Delta celle scoperte", delta_cells)
+    with d3:
+        delta_short = draft_cov_sum["total_shortage"] - base_cov_sum["total_shortage"]
+        st.metric("Delta scopertura totale", delta_short)
+    if not diff_df.empty:
+        st.caption("Prime modifiche bozza vs baseline")
+        _dataframe(diff_df.head(200), width="stretch", hide_index=True)
+    else:
+        st.caption("Nessuna differenza tra bozza e baseline.")
 
     st.divider()
 
@@ -1927,7 +2824,7 @@ def _render_kpi_tab(draft: dict, data: dict) -> None:
             )
 
         if rows_disp:
-            st.dataframe(pd.DataFrame(rows_disp), width="stretch", hide_index=True)
+            _dataframe(pd.DataFrame(rows_disp), width="stretch", hide_index=True)
 
 
 @st.fragment
@@ -1992,6 +2889,8 @@ def _grid_section():
         else:
             # primo click → seleziona (evidenzia)
             st.session_state["cov_selection"] = (rep, ds)
+            # Apertura diretta dialog copertura su click cella.
+            cov_dlg_req = (rep, ds)
 
     # ── 4. Leggi stato aggiornato (dopo aver processato i click) ─────────────
     show_filters  = st.session_state.get("show_filters", False)
@@ -2038,8 +2937,14 @@ def _grid_section():
         if _base2_locks is not None:
             _sched_data["locks"] = _base2_locks
         dates, all_rows = build_schedule(_sched_data)
+        _cov_input_data = dict(_sched_data)
+        _cov_input_data["demand_overrides"] = _draft.get(
+            "demand_overrides",
+            data.get("demand_overrides", pd.DataFrame()),
+        )
     else:
         dates, all_rows = build_schedule(data)
+        _cov_input_data = data
     all_roles     = sorted(emp_df["role"].dropna().unique().tolist())
     view_reparto  = st.session_state.get("view_reparto", "Tutti")
     view_role     = st.session_state.get("view_role", "Tutti")
@@ -2127,7 +3032,7 @@ def _grid_section():
             if _cs:
                 try:
                     _consolidated_before = pd.Timestamp(_cs).date()
-                except Exception:
+                except (TypeError, ValueError):
                     pass
         grid_html = render_grid(dates, filtered_rows, consolidated_before=_consolidated_before)
         click_detector(grid_html, key="grid")
@@ -2157,7 +3062,7 @@ def _grid_section():
         cov_data: dict = {}
         if show_coverage:
             st.markdown("**Copertura del fabbisogno**")
-            cov_data = compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
+            cov_data = compute_coverage_preview(_cov_input_data, all_rows, assignments_df=_cov_adf)
             cov_html = render_coverage_grid(dates, all_reparti, cov_data, cov_click_counter, cov_selection)
             click_detector(cov_html, key="coverage_grid")
             # Pulsante contestuale: 1 clic seleziona la cella, pulsante apre il dialog
@@ -2179,7 +3084,11 @@ def _grid_section():
             _show_day_dialog({"eid": _early_sel["sel_id"], "date": _early_sel.get("sel_date", "")}, data)
         elif _dialog_kind == "cov":
             _cov_rep, _cov_ds = open_cov_dialog
-            _cov_d = cov_data if cov_data else compute_coverage_preview(data, all_rows, assignments_df=_cov_adf)
+            _cov_d = (
+                cov_data
+                if cov_data
+                else compute_coverage_preview(_cov_input_data, all_rows, assignments_df=_cov_adf)
+            )
             _show_cov_dialog({"reparto": _cov_rep, "date": _cov_ds, "cov_data": _cov_d}, data)
 
     if _has_kpi:
@@ -2212,6 +3121,23 @@ if _ottimizza_req:
                 _b2_locks = _prev_draft.get("base_locks")
                 if _b2_locks is not None:
                     _run_data["locks"] = _b2_locks.copy()
+                _b2_ovr = _prev_draft.get("demand_overrides")
+                if _b2_ovr is not None:
+                    _run_data["demand_overrides"] = _normalize_demand_overrides(_b2_ovr)
+
+        # Applica override puntuali di fabbisogno (solo runtime, non tocca i CSV sorgente).
+        # Deve avvenire dopo l'eventuale sostituzione base2 in "Cerca meglio".
+        _mp2, _cg2, _cr2, _ovr_warn = _apply_demand_overrides_tables(
+            _run_data.get("month_plan", pd.DataFrame()),
+            _run_data.get("coverage_groups", pd.DataFrame()),
+            _run_data.get("coverage_roles", pd.DataFrame()),
+            _run_data.get("demand_overrides", pd.DataFrame()),
+        )
+        _run_data["month_plan"] = _mp2
+        _run_data["coverage_groups"] = _cg2
+        _run_data["coverage_roles"] = _cr2
+        if _ovr_warn:
+            st.warning("Override fabbisogno: " + " | ".join(_ovr_warn[:3]))
 
         with st.spinner("Preparazione cartella di lavoro…"):
             _tmp_folder = prepare_run_folder(_run_data)
@@ -2289,20 +3215,14 @@ if _ottimizza_req:
             _base2_pa = st.session_state["data"].get("preassignments", pd.DataFrame()).copy()
             _base2_locks = st.session_state["data"].get("locks", pd.DataFrame()).copy()
 
-        st.session_state["draft"] = {
-            "preassignments":        _draft_pa,
-            "status_name":           _result.status_name,
-            "objective_value":       _result.objective_value,
-            "calc_start":            _ottimizza_req["start"],
-            "calc_end":              _ottimizza_req["end"],
-            "assignments_df":        _result.assignments_df.copy(),
-            "kpi":                   _build_draft_kpi_data(_result),
-            "infeasibility_summary": _result.infeasibility_summary,
-            "base_preassignments":   _base2_pa,
-            "base_locks":            _base2_locks,
-            "manual_edits":          False,
-            "edited_cells":          {},
-        }
+        _store_new_draft(
+            draft_pa=_draft_pa,
+            result=_result,
+            ottimizza_req=_ottimizza_req,
+            base2_pa=_base2_pa,
+            base2_locks=_base2_locks,
+            demand_overrides=_run_data.get("demand_overrides", pd.DataFrame()),
+        )
 
         # ── Feedback warm start ───────────────────────────────────────────
         _used_ws = _warm_df is not None
@@ -2324,9 +3244,19 @@ if _ottimizza_req:
         if _ws_note:
             st.session_state["draft"]["warm_start_note"] = _ws_note
 
-        st.session_state["view_draft"] = True
-
-    except Exception as _exc:
+    except (
+        OSError,
+        IOError,
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+        ArithmeticError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+        yaml.YAMLError,
+    ) as _exc:
+        LOGGER.exception("Errore durante run solver demo")
         _run_error = str(_exc)
     finally:
         if _tmp_folder is not None and Path(_tmp_folder).exists():
@@ -2342,6 +3272,7 @@ _draft = st.session_state.get("draft")
 if _draft:
     _view_draft = st.session_state.get("view_draft", False)
     _feasible = _draft["status_name"] in ("OPTIMAL", "FEASIBLE")
+    _can_refine = _feasible and _has_valid_calc_params(st.session_state.get("calc_params"))
     _status_icon = "✅" if _feasible else "⚠️"
     _obj_str = (
         f" · obiettivo {_draft['objective_value']:.1f}"
@@ -2370,65 +3301,55 @@ if _draft:
         )
         st.session_state["view_draft"] = (_radio_val == "Bozza")
     with _b3:
-        if st.button(
+        if _button(
             "Salva bozza",
             type="primary",
             width="stretch",
             disabled=not _feasible,
             help=None if _feasible else "Non salvabile: il solver non ha trovato una soluzione.",
         ):
-            # Promuovi base2 a base1: preassignments, locks, assignments_df
-            _save_start = _draft.get("calc_start")
-            _save_end   = _draft.get("calc_end")
-            _base2_pa = _draft.get("base_preassignments", pd.DataFrame())
-            if _save_start and _save_end:
-                _final_pa = _merge_draft_pa(
-                    _draft["preassignments"],
-                    _base2_pa,
-                    _save_start,
-                    _save_end,
-                )
-            else:
-                _final_pa = _draft["preassignments"].copy()
-            st.session_state["data"]["preassignments"] = _final_pa
-            # Lock: promuovi base2 locks a ufficiali
-            _base2_locks = _draft.get("base_locks")
-            if _base2_locks is not None:
-                st.session_state["data"]["locks"] = _base2_locks.copy()
-            # Persisti assignments_df solo se coerente (nessun edit manuale)
-            if _draft.get("manual_edits", False):
-                # assignments_df stale dopo edit manuali → rimuovi per evitare incoerenza
-                st.session_state["data"].pop("assignments_df", None)
-            else:
-                _save_adf = _draft.get("assignments_df", pd.DataFrame())
-                if not _save_adf.empty:
-                    st.session_state["data"]["assignments_df"] = _save_adf.copy()
-                else:
-                    st.session_state["data"].pop("assignments_df", None)
-            del st.session_state["draft"]
-            st.session_state.pop("view_draft", None)
+            _promote_draft_to_current(_draft)
             st.rerun()
     with _b4:
-        if st.button(
+        if _button(
             "Cerca meglio",
             width="stretch",
-            disabled=not _feasible,
-            help=("Rilancia il solver usando la bozza come punto di partenza"
-                  if _feasible else "Non disponibile: bozza non valida."),
+            disabled=not _can_refine,
+            help=(
+                "Rilancia il solver usando la bozza come punto di partenza"
+                if _can_refine
+                else (
+                    "Non disponibile: bozza non valida."
+                    if not _feasible
+                    else "Parametri di calcolo non disponibili. Configura dalla sidebar."
+                )
+            ),
         ):
-            _cm_params = st.session_state.get("calc_params")
-            _req_keys = {"start", "end", "cross", "time_s", "reparti", "stability"}
-            if _cm_params and _req_keys.issubset(_cm_params):
-                _cm_params = dict(_cm_params)
-                _cm_params["use_warm_start"] = True
-                st.session_state["_ottimizza_req"] = _cm_params
+            if _queue_warm_start_from_calc_params():
                 st.rerun()
             else:
                 st.error("Parametri di calcolo non disponibili. Configura dalla sidebar.")
     with _b5:
-        if st.button("Annulla", width="stretch"):
-            del st.session_state["draft"]
-            st.session_state.pop("view_draft", None)
+        if _button("Annulla", width="stretch"):
+            _drop_draft_state()
             st.rerun()
-
+    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _e1, _e2 = st.columns(2)
+    with _e1:
+        _download_button(
+            "Esporta piano corrente",
+            data=_build_current_export_zip(st.session_state["data"]),
+            file_name=f"export_current_{_ts}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
+    with _e2:
+        _download_button(
+            "Esporta bozza",
+            data=_build_draft_export_zip(_draft),
+            file_name=f"export_draft_{_ts}.zip",
+            mime="application/zip",
+            width="stretch",
+        )
 _grid_section()
+
