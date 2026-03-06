@@ -191,7 +191,8 @@ section[data-testid="stSidebar"] .stTextInput label {
     height: var(--hdr-h);
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
+    gap: 12px;
     border-radius: 16px 16px 0 0;
     box-shadow: 0 4px 16px rgba(9,61,65,0.15);
 }

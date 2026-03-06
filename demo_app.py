@@ -21,6 +21,7 @@ import zipfile
 import pandas as pd
 import yaml
 import streamlit as st
+import streamlit.components.v1 as components
 from st_click_detector import click_detector
 
 LOGGER = logging.getLogger(__name__)
@@ -52,12 +53,49 @@ except (ImportError, ModuleNotFoundError):
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="SKYppm - Piano Programmazione Mensile",
+    page_title="SKY HR Scheduler",
     page_icon="\U0001f4c5",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 inject_css()
+
+
+def _inject_scroll_restore() -> None:
+    """Preserva la posizione verticale durante i rerun Streamlit.
+
+    Evita il salto verso il basso dopo click su celle (click_detector).
+    """
+    components.html(
+        """
+        <script>
+        (function () {
+          const KEY = "skyhr_scroll_y";
+          const P = window.parent;
+          const save = () => {
+            try { sessionStorage.setItem(KEY, String(P.scrollY || 0)); } catch (_) {}
+          };
+          const restore = () => {
+            try {
+              const y = sessionStorage.getItem(KEY);
+              if (y !== null) {
+                const n = parseInt(y, 10);
+                if (!Number.isNaN(n)) P.scrollTo(0, n);
+              }
+            } catch (_) {}
+          };
+          P.addEventListener("scroll", save, { passive: true });
+          restore();
+          setTimeout(restore, 0);
+          setTimeout(restore, 60);
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
+_inject_scroll_restore()
 
 # ── Constants ────────────────────────────────────────────────────────────────
 DAY_LETTERS = {0: "L", 1: "M", 2: "M", 3: "G", 4: "V", 5: "S", 6: "D"}
@@ -70,7 +108,7 @@ FIXED_HOLIDAYS = {
     (1, 1), (6, 1), (25, 4), (1, 5), (2, 6),
     (15, 8), (1, 11), (8, 12), (25, 12), (26, 12),
 }
-TIME_PRESETS = {"Veloce (30s)": 30, "Standard (60s)": 60, "Avanzata (300s)": 300}
+TIME_PRESETS = {"Veloce": 60, "Standard": 180, "Approfondita": 300}
 
 _DATASET_RESET_KEYS: tuple[str, ...] = (
     "draft",
@@ -1228,7 +1266,7 @@ td.dc-cell.col-consolidated { opacity: 0.50; }
         name = _html.escape(row["name"])
         parts.append(
             f'<tr><td class="ncell" title="{name}">'
-            f'<a href="#" id="emp-{eid}">{name}</a></td>'
+            f'<a href="javascript:void(0)" id="emp-{eid}">{name}</a></td>'
         )
         locked_days = row.get("locked_days", set())
         pa_days = row.get("pa_days", set())
@@ -1245,7 +1283,7 @@ td.dc-cell.col-consolidated { opacity: 0.50; }
             cons_cls = " col-consolidated" if ds in consolidated_ds else ""
             parts.append(
                 f'<td class="{css} dc-cell{extra_cls}{cons_cls}">'
-                f'<a href="#" id="day-{eid}-{d}">'
+                f'<a href="javascript:void(0)" id="day-{eid}-{d}">'
                 f'<div class="dc"><div class="l1">{code}</div>'
                 f'<div class="l2"></div><div class="l3"></div></div></a></td>'
             )
@@ -1556,32 +1594,55 @@ with st.sidebar:
                 value=float(_rr.get("min_between_shifts_h", 11)),
                 key="cfg_rest_min_between_h",
             )
+            _allow_rest11_default = bool(
+                int(_r11.get("max_monthly_exceptions", 2)) > 0
+                or int(_r11.get("max_consecutive_exceptions", 1)) > 0
+            )
+            # Inizializzazione stateful una sola volta: evita warning Streamlit
+            # "default value + Session State API" sugli stessi widget key.
+            if "cfg_rest11h_allow_violations" not in st.session_state:
+                st.session_state["cfg_rest11h_allow_violations"] = _allow_rest11_default
+            if "cfg_rest11h_max_monthly" not in st.session_state:
+                st.session_state["cfg_rest11h_max_monthly"] = int(_r11.get("max_monthly_exceptions", 2))
+            if "cfg_rest11h_max_consec" not in st.session_state:
+                st.session_state["cfg_rest11h_max_consec"] = int(_r11.get("max_consecutive_exceptions", 1))
+
+            def _on_toggle_rest11_violations() -> None:
+                if not bool(st.session_state.get("cfg_rest11h_allow_violations", True)):
+                    st.session_state["cfg_rest11h_max_monthly"] = 0
+                    st.session_state["cfg_rest11h_max_consec"] = 0
+
+            _allow_rest11_viol = st.checkbox(
+                "Consenti violazione riposo minimo tra turni",
+                key="cfg_rest11h_allow_violations",
+                on_change=_on_toggle_rest11_violations,
+            )
             _ca, _cb = st.columns(2)
             with _ca:
+                st.number_input(
+                    "Max eccezioni 11h mensili",
+                    min_value=0, step=1,
+                    key="cfg_rest11h_max_monthly",
+                    disabled=not _allow_rest11_viol,
+                )
                 st.number_input(
                     "Min gg riposo settimanale",
                     min_value=0, step=1,
                     value=int(_d.get("weekly_rest_min_days", 1)),
                     key="cfg_weekly_rest_min_days",
                 )
-                st.number_input(
-                    "Max eccezioni 11h mensili",
-                    min_value=0, step=1,
-                    value=int(_r11.get("max_monthly_exceptions", 2)),
-                    key="cfg_rest11h_max_monthly",
-                )
             with _cb:
+                st.number_input(
+                    "Max eccezioni 11h consecutive",
+                    min_value=0, step=1,
+                    key="cfg_rest11h_max_consec",
+                    disabled=not _allow_rest11_viol,
+                )
                 st.number_input(
                     "Min gg riposo bisettimanale",
                     min_value=0, step=1,
                     value=int(_d.get("biweekly_rest_min_days", 2)),
                     key="cfg_biweekly_rest_min_days",
-                )
-                st.number_input(
-                    "Max eccezioni 11h consecutive",
-                    min_value=0, step=1,
-                    value=int(_r11.get("max_consecutive_exceptions", 1)),
-                    key="cfg_rest11h_max_consec",
                 )
 
             # ── Notti ─────────────────────────────────────────────────────────
@@ -1606,11 +1667,6 @@ with st.sidebar:
                     min_value=0, step=1,
                     value=int(_n.get("max_per_month", 8)),
                     key="cfg_night_max_month",
-                )
-                st.checkbox(
-                    "Abilitate (default)",
-                    value=bool(_n.get("can_work_night", True)),
-                    key="cfg_night_can_work",
                 )
             _ca, _cb = st.columns(2)
             with _ca:
@@ -1672,15 +1728,19 @@ with st.sidebar:
                 _dd = _c.setdefault("defaults", {})
                 _dd["weekly_rest_min_days"]   = st.session_state["cfg_weekly_rest_min_days"]
                 _dd["biweekly_rest_min_days"] = st.session_state["cfg_biweekly_rest_min_days"]
+                _rest11_viol_enabled = bool(st.session_state.get("cfg_rest11h_allow_violations", True))
                 _dd.setdefault("rest11h", {}).update({
-                    "max_monthly_exceptions":     st.session_state["cfg_rest11h_max_monthly"],
-                    "max_consecutive_exceptions": st.session_state["cfg_rest11h_max_consec"],
+                    "max_monthly_exceptions":     (
+                        st.session_state["cfg_rest11h_max_monthly"] if _rest11_viol_enabled else 0
+                    ),
+                    "max_consecutive_exceptions": (
+                        st.session_state["cfg_rest11h_max_consec"] if _rest11_viol_enabled else 0
+                    ),
                 })
                 _dd.setdefault("night", {}).update({
                     "max_consecutive_nights": st.session_state["cfg_night_max_consec"],
                     "max_per_week":           st.session_state["cfg_night_max_week"],
                     "max_per_month":          st.session_state["cfg_night_max_month"],
-                    "can_work_night":         st.session_state["cfg_night_can_work"],
                 })
                 _dd.setdefault("balance", {})["max_balance_delta_month_h"] = (
                     st.session_state["cfg_balance_max_delta"]
@@ -1703,7 +1763,7 @@ with st.sidebar:
 
         st.markdown("---")
 
-        calc_time = st.radio("Tempo calcolo", list(TIME_PRESETS.keys()), index=1)
+        calc_time = st.radio("Modalità di ricerca", list(TIME_PRESETS.keys()), index=1)
 
         # Salva parametri nel session state (disponibili anche al prossimo run)
         st.session_state["calc_params"] = {
@@ -1757,9 +1817,9 @@ with st.sidebar:
 if not st.session_state.get("loaded"):
     st.markdown(
         '<div class="sky-header">'
-        '<div><div class="hdr-title">SKYppm &mdash; Piano di programmazione mensile</div>'
-        '<div class="hdr-sub">Carica un dataset dalla sidebar per iniziare</div></div>'
         f'{_LOGO_IMG}'
+        '<div><div class="hdr-title">SKY HR Scheduler</div>'
+        '<div class="hdr-sub">Carica un dataset dalla sidebar per iniziare</div></div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1773,7 +1833,7 @@ month_label = f"{MONTH_NAMES.get(start_date.month, '')} {start_date.year}"
 st.markdown(
     '<div class="sky-header">'
     f'{_LOGO_IMG}'
-    f'<div><div class="hdr-title">SKYppm &mdash; Piano di programmazione mensile</div></div>'
+    f'<div><div class="hdr-title">SKY HR Scheduler</div></div>'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -2834,17 +2894,43 @@ def _grid_section():
     all_reparti = sorted(emp_df["reparto_id"].dropna().unique().tolist())
 
     # ── 1. Leggi tutti i click PRIMA di qualsiasi rendering ──────────────────
-    pending_click = st.session_state.get("grid", "")
-    tb_raw        = st.session_state.get("toolbar", "")
-    cov_raw       = st.session_state.get("coverage_grid", "")
+    raw_grid = st.session_state.get("grid", "")
+    raw_tb = st.session_state.get("toolbar", "")
+    raw_cov = st.session_state.get("coverage_grid", "")
+    if "_last_grid_click" not in st.session_state:
+        st.session_state["_last_grid_click"] = ""
+    if "_last_toolbar_click" not in st.session_state:
+        st.session_state["_last_toolbar_click"] = ""
+    if "_last_coverage_click" not in st.session_state:
+        st.session_state["_last_coverage_click"] = ""
+
+    pending_click = (
+        raw_grid
+        if raw_grid and raw_grid != st.session_state.get("_last_grid_click", "")
+        else ""
+    )
+    tb_raw = (
+        raw_tb
+        if raw_tb and raw_tb != st.session_state.get("_last_toolbar_click", "")
+        else ""
+    )
+    cov_raw = (
+        raw_cov
+        if raw_cov and raw_cov != st.session_state.get("_last_coverage_click", "")
+        else ""
+    )
+
+    st.session_state["_last_grid_click"] = raw_grid
+    st.session_state["_last_toolbar_click"] = raw_tb
+    st.session_state["_last_coverage_click"] = raw_cov
 
     det_counter      = st.session_state.get("_det_counter", 0)
     clear_counter    = st.session_state.get("_clear_counter", 0)
     filtri_counter   = st.session_state.get("_filtri_counter", 0)
     show_cov_counter = st.session_state.get("_show_cov_counter", 0)
     cov_click_counter = st.session_state.get("_cov_click_counter", 0)
-    # Request di apertura dialog copertura via pulsante (consumato una volta sola)
-    cov_dlg_req: tuple | None = st.session_state.pop("_cov_dlg_req", None)
+    # Request legacy (non usata): consumata per evitare effetti collaterali.
+    st.session_state.pop("_dialog_req", None)
 
     det_id      = f"det-{det_counter}"
     clear_id    = f"clear-{clear_counter}"
@@ -2862,19 +2948,19 @@ def _grid_section():
     open_dialog: tuple | None = None
     open_cov_dialog: tuple | None = None
 
-    if tb_raw == det_id and sel_now:
+    if isinstance(tb_raw, str) and tb_raw.startswith("det-") and sel_now:
         st.session_state["_det_counter"] = det_counter + 1
         open_dialog = ("det", sel_now)
-    elif tb_raw == clear_id:
+    elif isinstance(tb_raw, str) and tb_raw.startswith("clear-"):
         st.session_state["_clear_counter"] = clear_counter + 1
         if not st.session_state.get("view_draft"):
             pa = st.session_state["data"]["preassignments"]
             st.session_state["data"]["preassignments"] = pa.iloc[0:0].copy()
             st.rerun()
-    elif tb_raw == filtri_id:
+    elif isinstance(tb_raw, str) and tb_raw.startswith("filtri-"):
         st.session_state["_filtri_counter"] = filtri_counter + 1
         st.session_state["show_filters"] = not st.session_state.get("show_filters", False)
-    elif tb_raw == show_cov_id:
+    elif isinstance(tb_raw, str) and tb_raw.startswith("showcov-"):
         st.session_state["_show_cov_counter"] = show_cov_counter + 1
         st.session_state["show_coverage"] = not st.session_state.get("show_coverage", False)
 
@@ -2889,8 +2975,8 @@ def _grid_section():
         else:
             # primo click → seleziona (evidenzia)
             st.session_state["cov_selection"] = (rep, ds)
-            # Apertura diretta dialog copertura su click cella.
-            cov_dlg_req = (rep, ds)
+            # Non aprire automaticamente il dialog: apertura solo tramite
+            # pulsante esplicito "Dettaglio copertura".
 
     # ── 4. Leggi stato aggiornato (dopo aver processato i click) ─────────────
     show_filters  = st.session_state.get("show_filters", False)
@@ -2904,9 +2990,8 @@ def _grid_section():
         _dialog_kind = "emp"
     elif _early_sel is not None and _early_sel.get("sel_type") == "day":
         _dialog_kind = "day"
-    elif cov_dlg_req:
-        # Apertura dialog copertura via pulsante "Dettaglio copertura"
-        open_cov_dialog = cov_dlg_req
+    elif open_cov_dialog:
+        # Apertura dialog copertura via pulsante esplicito
         _dialog_kind = "cov"
 
     # ── 5. Costruisci schedule (dopo eventuale clear) ────────────────────────
@@ -2990,19 +3075,19 @@ def _grid_section():
         toolbar_html = (
             _TB_CSS +
             f'<div class="tb">'
-            f'<a id="{det_id}" href="#" class="{det_cls}">{det_label}</a>'
+            f'<a id="{det_id}" href="javascript:void(0)" class="{det_cls}">{det_label}</a>'
             '<span class="sep"></span>'
-            f'<a id="{clear_id}" href="#" class="{clear_cls}">&#128465; Svuota preassegnazioni</a>'
+            f'<a id="{clear_id}" href="javascript:void(0)" class="{clear_cls}">&#128465; Svuota preassegnazioni</a>'
             '<span class="sep"></span>'
             '<span class="btn off">&Sigma; Mostra accum.</span>'
-            f'<a id="{show_cov_id}" href="#" class="{show_cov_cls}">&#128202; Mostra copertura</a>'
+            f'<a id="{show_cov_id}" href="javascript:void(0)" class="{show_cov_cls}">&#128202; Mostra copertura</a>'
             '<span class="sep"></span>'
             '<span class="btn off">&#128260; Aggiorna</span>'
             '<span class="sep"></span>'
             '<span class="btn off">&#128424; Stampa</span>'
             '<span class="btn off">&#128203; Export</span>'
             '<span class="sep"></span>'
-            f'<a id="{filtri_id}" href="#" class="{filtri_cls}">&#9776; Filtri</a>'
+            f'<a id="{filtri_id}" href="javascript:void(0)" class="{filtri_cls}">&#9776; Filtri</a>'
             f'<span class="info">{n_emp} dipendenti &middot; {n_days} giorni &middot; {month_label}</span>'
             '</div>'
         )
@@ -3073,15 +3158,17 @@ def _grid_section():
                     key="cov_detail_btn",
                     type="secondary",
                 ):
-                    st.session_state["_cov_dlg_req"] = cov_selection
-                    st.rerun()
+                    open_cov_dialog = (_cov_sel_rep, _cov_sel_ds)
+                    _dialog_kind = "cov"
 
         # ── 10. Apri dialog (SEMPRE per ultimo, una funzione per tipo) ─────────
         # Funzioni diverse = componenti React indipendenti = no content bleed
         if _dialog_kind == "emp":
             _show_emp_dialog({"eid": _early_sel["sel_id"]}, data)
+            return
         elif _dialog_kind == "day":
             _show_day_dialog({"eid": _early_sel["sel_id"], "date": _early_sel.get("sel_date", "")}, data)
+            return
         elif _dialog_kind == "cov":
             _cov_rep, _cov_ds = open_cov_dialog
             _cov_d = (
@@ -3090,6 +3177,7 @@ def _grid_section():
                 else compute_coverage_preview(_cov_input_data, all_rows, assignments_df=_cov_adf)
             )
             _show_cov_dialog({"reparto": _cov_rep, "date": _cov_ds, "cov_data": _cov_d}, data)
+            return
 
     if _has_kpi:
         with _tab_analisi:
@@ -3352,4 +3440,3 @@ if _draft:
             width="stretch",
         )
 _grid_section()
-
