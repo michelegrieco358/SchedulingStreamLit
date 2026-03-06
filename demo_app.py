@@ -2128,8 +2128,7 @@ def render_coverage_grid(dates: list[date], reparti: list[str], cov_data: dict, 
 
 # ── Detail dialogs (modal overlay) ────────────────────────────────────────
 # Tre funzioni separate con titoli diversi: ogni @st.dialog crea un componente
-# React INDIPENDENTE nel frontend. Stessa funzione = stessa istanza React =
-# content bleed tra chiamate successive con contenuto diverso.
+# React INDIPENDENTE nel frontend.
 
 @st.dialog("Dettaglio dipendente")
 def _show_emp_dialog(payload: dict, app_data: dict) -> None:
@@ -3151,18 +3150,17 @@ def _grid_section():
             cov_html = render_coverage_grid(dates, all_reparti, cov_data, cov_click_counter, cov_selection)
             click_detector(cov_html, key="coverage_grid")
             # Pulsante contestuale: 1 clic seleziona la cella, pulsante apre il dialog
-            if cov_selection and _dialog_kind != "cov":
+            if cov_selection and _dialog_kind is None:
                 _cov_sel_rep, _cov_sel_ds = cov_selection
                 if st.button(
                     f"Dettaglio copertura: {_cov_sel_rep} · {_cov_sel_ds}",
-                    key="cov_detail_btn",
+                    key=f"cov_detail_btn_{_cov_sel_rep}_{_cov_sel_ds}_{cov_click_counter}",
                     type="secondary",
                 ):
                     open_cov_dialog = (_cov_sel_rep, _cov_sel_ds)
                     _dialog_kind = "cov"
 
         # ── 10. Apri dialog (SEMPRE per ultimo, una funzione per tipo) ─────────
-        # Funzioni diverse = componenti React indipendenti = no content bleed
         if _dialog_kind == "emp":
             _show_emp_dialog({"eid": _early_sel["sel_id"]}, data)
             return
@@ -3233,9 +3231,25 @@ if _ottimizza_req:
         with st.spinner("Caricamento e validazione dati…"):
             _loaded = _load_all_data(_run_data["cfg"], _tmp_folder)
 
-        _max_s = float(_ottimizza_req["time_s"])
+        # Guardrail: evita tempi stale/non previsti in session_state.
+        _allowed_times = {int(v) for v in TIME_PRESETS.values()}
+        _req_time_raw = _ottimizza_req.get("time_s", TIME_PRESETS["Standard"])
+        try:
+            _req_time = int(float(_req_time_raw))
+        except (TypeError, ValueError):
+            _req_time = int(TIME_PRESETS["Standard"])
+        if _req_time not in _allowed_times:
+            LOGGER.warning(
+                "Tempo solver non previsto dalla UI: %s. Fallback a Standard=%s",
+                _req_time_raw,
+                TIME_PRESETS["Standard"],
+            )
+            _req_time = int(TIME_PRESETS["Standard"])
+        _max_s = float(_req_time)
+        _ottimizza_req["time_s"] = _req_time
         _preset_label = next(
-            (k for k, v in TIME_PRESETS.items() if v == int(_max_s)), f"{int(_max_s)}s"
+            (k for k, v in TIME_PRESETS.items() if int(v) == _req_time),
+            f"{_req_time}s",
         )
 
         # ── Warm start: costruisci hint dalla bozza precedente ────────────
@@ -3311,6 +3325,8 @@ if _ottimizza_req:
             base2_locks=_base2_locks,
             demand_overrides=_run_data.get("demand_overrides", pd.DataFrame()),
         )
+        st.session_state["draft"]["requested_time_s"] = _req_time
+        st.session_state["draft"]["solver_wall_time_s"] = float(_result.solver.WallTime())
 
         # ── Feedback warm start ───────────────────────────────────────────
         _used_ws = _warm_df is not None
@@ -3373,6 +3389,13 @@ if _draft:
         _ws_note = _draft.get("warm_start_note")
         if _ws_note:
             st.caption(_ws_note)
+        _req_t = _draft.get("requested_time_s")
+        _sol_t = _draft.get("solver_wall_time_s")
+        if _req_t is not None and _sol_t is not None:
+            st.caption(
+                f"Tempo solver: {_sol_t:.1f}s su limite {_req_t}s "
+                "(il totale run include anche load/build/post-processing)."
+            )
         if _draft.get("manual_edits", False):
             st.caption(
                 "Bozza modificata manualmente: copertura e KPI possono essere "
