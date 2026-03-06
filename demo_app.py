@@ -26,6 +26,9 @@ from st_click_detector import click_detector
 
 LOGGER = logging.getLogger(__name__)
 
+_UI_TRACE_KEY = "_ui_trace"
+_UI_TRACE_MAX = 200
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -145,6 +148,29 @@ def _clear_session_keys(keys: tuple[str, ...]) -> None:
 
 def _drop_draft_state() -> None:
     _clear_session_keys(_DRAFT_ONLY_KEYS)
+
+
+def _trace_ui_event(event: str, **fields: object) -> None:
+    """Registra eventi UI per debug dialog/click sequencing.
+
+    Traccia sia in session_state (ultimi eventi) sia nel logger applicativo.
+    """
+    trace = st.session_state.get(_UI_TRACE_KEY)
+    if not isinstance(trace, list):
+        trace = []
+
+    item = {
+        "event": str(event),
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        **{k: fields[k] for k in sorted(fields)},
+    }
+    trace.append(item)
+    if len(trace) > _UI_TRACE_MAX:
+        trace = trace[-_UI_TRACE_MAX:]
+    st.session_state[_UI_TRACE_KEY] = trace
+
+    flat = " ".join(f"{k}={repr(v)}" for k, v in item.items() if k != "event")
+    LOGGER.info("[ui-trace] %s %s", event, flat)
 
 
 def _queue_warm_start_from_calc_params() -> bool:
@@ -1553,6 +1579,17 @@ with st.sidebar:
             help="Seleziona i reparti da includere nel calcolo della programmazione",
         )
 
+        with st.expander("Debug dialog/click trace", expanded=False):
+            _trace_items = st.session_state.get(_UI_TRACE_KEY, [])
+            _trace_df = pd.DataFrame(_trace_items[-30:]) if isinstance(_trace_items, list) else pd.DataFrame()
+            if _trace_df.empty:
+                st.caption("Nessun evento tracciato in questa sessione.")
+            else:
+                _dataframe(_trace_df, width="stretch", hide_index=True)
+            if st.button("Pulisci trace", key="clear_ui_trace"):
+                st.session_state[_UI_TRACE_KEY] = []
+                st.rerun()
+
         horizon = cfg.get("horizon", {})
         h_start = pd.Timestamp(horizon.get("start_date", "2024-07-01")).date()
         h_end = pd.Timestamp(horizon.get("end_date", "2024-07-31")).date()
@@ -2924,6 +2961,16 @@ def _grid_section():
     st.session_state["_last_toolbar_click"] = raw_tb
     st.session_state["_last_coverage_click"] = raw_cov
 
+    _trace_ui_event(
+        "raw_clicks",
+        raw_grid=raw_grid,
+        pending_click=pending_click,
+        raw_toolbar=raw_tb,
+        tb_raw=tb_raw,
+        raw_coverage=raw_cov,
+        cov_raw=cov_raw,
+    )
+
     det_counter      = st.session_state.get("_det_counter", 0)
     clear_counter    = st.session_state.get("_clear_counter", 0)
     filtri_counter   = st.session_state.get("_filtri_counter", 0)
@@ -2942,7 +2989,9 @@ def _grid_section():
         new_sel = _parse_click_id(pending_click)
         if new_sel:
             st.session_state["grid_selection"] = new_sel
+            _trace_ui_event("grid_selection_update", source="grid", selection=new_sel)
     sel_now = st.session_state.get("grid_selection")
+    _trace_ui_event("grid_selection_current", selection=sel_now)
 
     # ── 3. Processa toolbar + coverage click (PRIMA del rendering, senza st.rerun) ──────
     open_dialog: tuple | None = None
@@ -2951,8 +3000,10 @@ def _grid_section():
     if isinstance(tb_raw, str) and tb_raw.startswith("det-") and sel_now:
         st.session_state["_det_counter"] = det_counter + 1
         open_dialog = ("det", sel_now)
+        _trace_ui_event("toolbar_action", action="det", selection=sel_now, det_counter=det_counter + 1)
     elif isinstance(tb_raw, str) and tb_raw.startswith("clear-"):
         st.session_state["_clear_counter"] = clear_counter + 1
+        _trace_ui_event("toolbar_action", action="clear", clear_counter=clear_counter + 1)
         if not st.session_state.get("view_draft"):
             pa = st.session_state["data"]["preassignments"]
             st.session_state["data"]["preassignments"] = pa.iloc[0:0].copy()
@@ -2960,9 +3011,21 @@ def _grid_section():
     elif isinstance(tb_raw, str) and tb_raw.startswith("filtri-"):
         st.session_state["_filtri_counter"] = filtri_counter + 1
         st.session_state["show_filters"] = not st.session_state.get("show_filters", False)
+        _trace_ui_event(
+            "toolbar_action",
+            action="filtri",
+            filtri_counter=filtri_counter + 1,
+            show_filters=st.session_state.get("show_filters", False),
+        )
     elif isinstance(tb_raw, str) and tb_raw.startswith("showcov-"):
         st.session_state["_show_cov_counter"] = show_cov_counter + 1
         st.session_state["show_coverage"] = not st.session_state.get("show_coverage", False)
+        _trace_ui_event(
+            "toolbar_action",
+            action="showcov",
+            show_cov_counter=show_cov_counter + 1,
+            show_coverage=st.session_state.get("show_coverage", False),
+        )
 
     cov_parsed = _parse_cov_click_id(cov_raw, cov_click_counter)
     if cov_parsed:
@@ -2977,6 +3040,12 @@ def _grid_section():
             st.session_state["cov_selection"] = (rep, ds)
             # Non aprire automaticamente il dialog: apertura solo tramite
             # pulsante esplicito "Dettaglio copertura".
+        _trace_ui_event(
+            "coverage_selection_update",
+            selection=st.session_state.get("cov_selection"),
+            cov_click_counter=cov_click_counter + 1,
+            parsed=cov_parsed,
+        )
 
     # ── 4. Leggi stato aggiornato (dopo aver processato i click) ─────────────
     show_filters  = st.session_state.get("show_filters", False)
@@ -2993,6 +3062,13 @@ def _grid_section():
     elif open_cov_dialog:
         # Apertura dialog copertura via pulsante esplicito
         _dialog_kind = "cov"
+
+    _trace_ui_event(
+        "dialog_resolution",
+        dialog_kind=_dialog_kind,
+        early_selection=_early_sel,
+        open_cov_dialog=open_cov_dialog,
+    )
 
     # ── 5. Costruisci schedule (dopo eventuale clear) ────────────────────────
     # In vista bozza: per i giorni nella finestra di calcolo usiamo le PA del
@@ -3164,9 +3240,15 @@ def _grid_section():
         # ── 10. Apri dialog (SEMPRE per ultimo, una funzione per tipo) ─────────
         # Funzioni diverse = componenti React indipendenti = no content bleed
         if _dialog_kind == "emp":
+            _trace_ui_event("dialog_open", kind="emp", payload={"eid": _early_sel["sel_id"]})
             _show_emp_dialog({"eid": _early_sel["sel_id"]}, data)
             return
         elif _dialog_kind == "day":
+            _trace_ui_event(
+                "dialog_open",
+                kind="day",
+                payload={"eid": _early_sel["sel_id"], "date": _early_sel.get("sel_date", "")},
+            )
             _show_day_dialog({"eid": _early_sel["sel_id"], "date": _early_sel.get("sel_date", "")}, data)
             return
         elif _dialog_kind == "cov":
@@ -3177,6 +3259,7 @@ def _grid_section():
                 else compute_coverage_preview(_cov_input_data, all_rows, assignments_df=_cov_adf)
             )
             _show_cov_dialog({"reparto": _cov_rep, "date": _cov_ds, "cov_data": _cov_d}, data)
+            _trace_ui_event("dialog_open", kind="cov", payload={"reparto": _cov_rep, "date": _cov_ds})
             return
 
     if _has_kpi:
