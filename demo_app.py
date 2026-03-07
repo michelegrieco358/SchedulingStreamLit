@@ -2711,10 +2711,10 @@ def _render_kpi_tab(draft: dict, data: dict) -> None:
         st.metric("Turni cambiati", len(diff_df))
     with d2:
         delta_cells = draft_cov_sum["uncovered_cells"] - base_cov_sum["uncovered_cells"]
-        st.metric("Delta celle scoperte", delta_cells)
+        st.metric("Differenza turni scoperti", delta_cells)
     with d3:
         delta_short = draft_cov_sum["total_shortage"] - base_cov_sum["total_shortage"]
-        st.metric("Delta scopertura totale", delta_short)
+        st.metric("Differenza personale mancante", delta_short)
     if not diff_df.empty:
         st.caption("Prime modifiche bozza vs baseline")
         _dataframe(diff_df.head(200), width="stretch", hide_index=True)
